@@ -61,6 +61,7 @@ sudo snap connect visiontak-client:hdmi-cec pi:hdmi-cec
 snap logs -f visiontak-client
 ```
 
+A fully baked SD card image is built by CI — see [`docs/sd-image-ci.md`](docs/sd-image-ci.md).
 For a bootable SD card without signing anything, burn Canonical's stock Ubuntu Core
 arm64 image and install this snap onto the running device —
 [`docs/sd-card-image.md`](docs/sd-card-image.md).
