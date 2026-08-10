@@ -1,0 +1,100 @@
+/* Kiosk chrome. Sized for a 10-foot viewing distance on a 1080p/4K TV. */
+
+window,
+stack {
+  background-color: #000000;
+}
+
+.vt-placeholder {
+  color: #8a94a6;
+  font-size: 34px;
+  font-weight: 300;
+}
+
+.vt-menu {
+  background-color: rgba(12, 15, 20, 0.94);
+  border: 1px solid rgba(120, 200, 255, 0.28);
+  border-radius: 20px;
+  padding: 32px 40px;
+  min-width: 620px;
+}
+
+.vt-menu-title {
+  color: #ffffff;
+  font-size: 30px;
+  font-weight: 600;
+  letter-spacing: 0.5px;
+}
+
+.vt-menu-list {
+  background-color: transparent;
+}
+
+.vt-menu-row {
+  padding: 14px 18px;
+  border-radius: 12px;
+  color: #c9d3e0;
+}
+
+.vt-menu-row:selected {
+  background-color: rgba(64, 158, 255, 0.28);
+  color: #ffffff;
+}
+
+.vt-menu-badge {
+  color: #6f7b8c;
+  font-size: 20px;
+  font-family: monospace;
+  min-width: 28px;
+}
+
+.vt-menu-row:selected .vt-menu-badge {
+  color: #7fc4ff;
+}
+
+.vt-menu-name {
+  font-size: 24px;
+  font-weight: 500;
+}
+
+.vt-menu-group {
+  font-size: 15px;
+  color: #7c8798;
+}
+
+.vt-menu-hint {
+  color: #6f7b8c;
+  font-size: 15px;
+  padding-top: 4px;
+}
+
+.vt-toast {
+  background-color: rgba(12, 15, 20, 0.92);
+  border: 1px solid rgba(120, 200, 255, 0.22);
+  border-radius: 999px;
+  color: #e8eef6;
+  font-size: 20px;
+  padding: 12px 28px;
+  margin-bottom: 56px;
+}
+
+.vt-info {
+  background-color: rgba(12, 15, 20, 0.9);
+  border-radius: 14px;
+  color: #b9c4d4;
+  font-family: monospace;
+  font-size: 17px;
+  padding: 20px 26px;
+  margin: 40px;
+}
+
+.vt-blank {
+  background-color: #000000;
+}
+
+/* Splash shown before the first dashboard paints, and while one is connecting.
+   Opaque black so it fully hides the webview underneath on a slow board. */
+.vt-splash {
+  background-color: #000000;
+  padding: 48px;
+}

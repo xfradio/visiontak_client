@@ -1,0 +1,36 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "visiontak-client"
+version = "0.1.0"
+description = "CEC-driven VisionTAK dashboard kiosk for Ubuntu Core"
+requires-python = ">=3.11"
+# Runtime deps are deliberately empty. PyGObject/GTK4/WebKitGTK come from the
+# distro packages staged by snapcraft; everything else is stdlib.
+dependencies = []
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0", "ruff>=0.5"]
+
+[project.scripts]
+visiontak-client = "visiontak_client.__main__:main"
+visiontak-probe = "visiontak_client.probe:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+visiontak_client = ["ui/*.css"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+
+[tool.ruff]
+line-length = 100
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B", "SIM"]

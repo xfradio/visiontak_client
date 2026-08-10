@@ -1,0 +1,64 @@
+#!/bin/sh
+# Translate `snap set visiontak-client …` into $SNAP_DATA/config.json.
+#
+# Every key is optional; unset keys are simply omitted so the client's own defaults
+# apply. The daemon is restarted only when it is already running, so `snap set`
+# during install does not race the service's first start.
+set -eu
+
+KEYS="server-url api-token device-id cec-backend cec-device osd-name \
+      refresh-interval rotate-interval start-dashboard verify-tls \
+      allowed-hosts max-live-views hardware-acceleration"
+
+TMP="$SNAP_DATA/config.json.tmp"
+mkdir -p "$SNAP_DATA"
+
+json_escape() {
+  printf '%s' "$1" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g'
+}
+
+{
+  printf '{'
+  first=1
+  for key in $KEYS; do
+    value="$(snapctl get "$key" 2>/dev/null || true)"
+    [ -z "$value" ] && continue
+    [ "$first" -eq 1 ] || printf ','
+    first=0
+    printf '\n  "%s": "%s"' "$key" "$(json_escape "$value")"
+  done
+  printf '\n}\n'
+} > "$TMP"
+
+chmod 0600 "$TMP"
+
+# Keep the outgoing configuration so a rejected one can be undone. snapd rolls back
+# its own state when this hook fails, but it does not roll back files the hook wrote,
+# and the daemon reads this file — leaving a rejected config here would crash-loop the
+# service, which is the exact failure this hook exists to prevent.
+BACKUP="$SNAP_DATA/config.json.prev"
+if [ -f "$SNAP_DATA/config.json" ]; then
+  cp "$SNAP_DATA/config.json" "$BACKUP"
+else
+  rm -f "$BACKUP"
+fi
+
+mv "$TMP" "$SNAP_DATA/config.json"
+
+# Fail the hook (and so the `snap set`) if the new configuration is unusable,
+# rather than letting the daemon crash-loop on it.
+if ! "$SNAP/bin/visiontak-client" --check-config; then
+  if [ -f "$BACKUP" ]; then
+    mv "$BACKUP" "$SNAP_DATA/config.json"
+  else
+    rm -f "$SNAP_DATA/config.json"
+  fi
+  echo "visiontak-client: rejected configuration" >&2
+  exit 1
+fi
+
+rm -f "$BACKUP"
+
+if snapctl services visiontak-client.daemon | grep -q active; then
+  snapctl restart visiontak-client.daemon
+fi

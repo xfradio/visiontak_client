@@ -1,0 +1,131 @@
+name: visiontak-client
+base: core24
+adopt-info: visiontak-client
+summary: VisionTAK dashboard kiosk for Ubuntu Core
+description: |
+  A full-screen, CEC-driven client for VisionTAK Server, built for unattended
+  displays running Ubuntu Core.
+
+  Renders server-hosted dashboards inside a WebKitGTK view on a single Wayland
+  surface supplied by Ubuntu Frame (Mir). The whole appliance is driven from the
+  TV remote over HDMI-CEC: open the chooser, pick a dashboard, step through them,
+  or jump straight to one with the number keys.
+
+  Configure with:
+    snap set visiontak-client server-url=https://visiontak.example api-token=…
+
+  HDMI-CEC requires a gadget-provided `custom-device` slot named `hdmi-cec`;
+  see the project docs for the gadget snippet and the image build.
+
+grade: stable
+confinement: strict
+
+# The shorthand form (`arm64:` alone) means build-on == build-for, which leaves no way
+# to produce a Pi snap from an x86 workstation. Spelling out build-on lets an amd64
+# host target arm64.
+platforms:
+  arm64:
+    build-on: [amd64, arm64]
+    build-for: [arm64]
+  amd64:
+    build-on: [amd64]
+    build-for: [amd64]
+
+# /dev/cec0 is not covered by any built-in interface. The gadget snap declares a
+# matching `custom-device` slot, which makes CEC access an explicit, auditable
+# property of the image rather than an ambient capability.
+plugs:
+  hdmi-cec:
+    interface: custom-device
+    custom-device: hdmi-cec
+
+# WebKit spawns WebKitNetworkProcess/WebKitWebProcess by absolute path — libexecdir is
+# compiled into libwebkitgtk-6.0.so and WEBKIT_EXEC_PATH is not honoured by this series.
+# Under strict confinement "/usr" is the core24 base, which ships no WebKit at all, so
+# the spawn fails and the daemon SIGTRAPs in a 5s restart loop. A layout makes that
+# absolute path exist inside the snap's mount namespace; the gnome extension already
+# does the same for webkit2gtk-4.0/4.1 but not for the GTK4 build. Both triplets bind
+# the one arch-independent directory `organize` produces, so this is valid as written
+# on amd64 and arm64 — the non-matching entry is harmless.
+layout:
+  /usr/lib/x86_64-linux-gnu/webkitgtk-6.0:
+    bind: $SNAP/usr/lib/webkitgtk-6.0
+  /usr/lib/aarch64-linux-gnu/webkitgtk-6.0:
+    bind: $SNAP/usr/lib/webkitgtk-6.0
+
+apps:
+  daemon:
+    command: bin/visiontak-client
+    daemon: simple
+    restart-condition: always
+    restart-delay: 5s
+    extensions: [gnome]
+    plugs:
+      - wayland
+      - opengl
+      - network
+      - network-bind
+      - browser-support
+      - hardware-observe
+      - hdmi-cec
+    environment:
+      GDK_BACKEND: wayland
+      WAYLAND_DISPLAY: wayland-0
+      # Snap daemons run as root on Ubuntu Core; Frame publishes its socket here.
+      XDG_RUNTIME_DIR: /run/user/0
+      GTK_A11Y: none
+      WEBKIT_FORCE_SANDBOX: "0"
+      # WEBKIT_EXEC_PATH deliberately not set: the 6.0 series ignores it. The helper
+      # processes are reached through the `layout` below instead.
+      PYTHONPATH: $SNAP/usr/lib/python3/dist-packages:$SNAP/lib/python3.12/site-packages
+      # GI_TYPELIB_PATH is deliberately not set here. $SNAPCRAFT_* is not expanded in
+      # this block — it reaches snap.yaml verbatim — so the obvious spelling silently
+      # evaluated to /usr/lib//girepository-1.0 and did nothing. The gnome extension's
+      # desktop-launch already puts $SNAP/usr/lib/<triplet>/girepository-1.0 on the
+      # path; verified by Gtk-4.0.typelib resolving out of the snap at runtime.
+
+  probe:
+    command: bin/visiontak-probe
+    plugs: [network]
+    environment:
+      PYTHONPATH: $SNAP/lib/python3.12/site-packages
+
+parts:
+  visiontak-client:
+    plugin: python
+    source: .
+    override-pull: |
+      craftctl default
+      craftctl set version="$(sed -n 's/^__version__ = "\(.*\)"/\1/p' src/visiontak_client/__init__.py)"
+    build-packages:
+      - python3-dev
+    # Brand assets ride with this part rather than a separate `dump` part. A dump part
+    # with a plain directory source is pulled once and never invalidated by a content
+    # change, so dropping the logo in later left the snap shipping without artwork
+    # while the build reported success. Missing artwork is not fatal — the client
+    # falls back to a text splash — so do not fail the build over it.
+    override-build: |
+      craftctl default
+      if [ -f "$CRAFT_PART_SRC/assets/visiontak-logo.png" ]; then
+        install -D -m644 "$CRAFT_PART_SRC/assets/visiontak-logo.png" \
+          "$CRAFT_PART_INSTALL/assets/visiontak-logo.png"
+      else
+        echo "no assets/visiontak-logo.png — snap will use the text splash" >&2
+      fi
+    stage-packages:
+      - python3-gi
+      - python3-gi-cairo
+      - gir1.2-gtk-4.0
+      - gir1.2-webkit-6.0
+      - libwebkitgtk-6.0-4
+    # PyGObject comes from the distro packages above rather than pip: the wheel would
+    # have to be compiled against the gnome SDK's headers for no benefit.
+    # Flatten to an arch-independent path so one `layout` stanza covers both platforms.
+    # It cannot be written with the triplet: snapd expands $SNAP at runtime but knows
+    # nothing about $SNAPCRAFT_*, which reaches snap.yaml verbatim and resolves to empty.
+    organize:
+      usr/lib/*/webkitgtk-6.0: usr/lib/webkitgtk-6.0
+    prime:
+      - -usr/share/doc
+      - -usr/share/man
+      - -usr/share/locale

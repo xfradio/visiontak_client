@@ -1,0 +1,19 @@
+{
+  "type": "model",
+  "series": "16",
+  "authority-id": "BRAND_ID",
+  "brand-id": "BRAND_ID",
+  "model": "visiontak-pi-arm64",
+  "architecture": "arm64",
+  "base": "core24",
+  "grade": "dangerous",
+  "snaps": [
+    { "name": "pi",              "type": "gadget", "default-channel": "24/stable" },
+    { "name": "pi-kernel",       "type": "kernel", "default-channel": "24/stable" },
+    { "name": "core24",          "type": "base",   "default-channel": "latest/stable" },
+    { "name": "snapd",           "type": "snapd",  "default-channel": "latest/stable" },
+    { "name": "ubuntu-frame",    "type": "app",    "default-channel": "24/stable" },
+    { "name": "visiontak-client","type": "app",    "default-channel": "latest/stable" }
+  ],
+  "timestamp": "TIMESTAMP"
+}

@@ -1,15 +1,16 @@
-# Logs
-*.log
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+.pytest_cache/
+.ruff_cache/
+build/
+dist/
+.local-data/
 
-# Environment
-.env
-.env.*
-!.env.example
+# snapcraft
+parts/
+prime/
+stage/
+*.snap
 
-# OS
-.DS_Store
-Thumbs.db
-
-# PandaOS
-.claude/
-.pandaos/

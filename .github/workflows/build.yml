@@ -1,0 +1,134 @@
+name: build
+
+on:
+  push:
+    branches: ["**"]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+# Building on every branch push and again on the PR would run the same commit twice;
+# superseding in-flight runs for a ref keeps that from queueing up behind itself.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: tests + lint
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      # No GTK, CEC hardware or server needed — see the README.
+      - run: pip install -e '.[dev]'
+      - run: pytest -q
+      - run: ruff check src tests
+
+  snap:
+    name: snap (${{ matrix.platform }})
+    needs: test
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # arm64 must build on an arm64 runner. Cross-building is not possible for
+          # this project: the gnome extension needs mesa-2404 and gnome-46-2404-sdk
+          # as build-snaps matching the *target* arch, and snapd cannot install arm64
+          # snaps into an amd64 container. See docs/arm64-build.md.
+          - platform: arm64
+            runner: ubuntu-24.04-arm
+          - platform: amd64
+            runner: ubuntu-24.04
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Warn if the logo is missing
+        run: |
+          if [ ! -f assets/visiontak-logo.png ]; then
+            echo "::warning::assets/visiontak-logo.png absent — the snap will ship a text splash"
+          fi
+
+      - uses: snapcore/action-build@v1
+        id: build
+        with:
+          snapcraft-args: pack --build-for=${{ matrix.platform }}
+
+      # The build can succeed while shipping no artwork, which is only visible on a
+      # display. Assert it landed rather than finding out on the Pi.
+      - name: Verify the logo was staged
+        if: hashFiles('assets/visiontak-logo.png') != ''
+        run: |
+          unsquashfs -q -f -d /tmp/snapcheck "${{ steps.build.outputs.snap }}" assets
+          test -f /tmp/snapcheck/assets/visiontak-logo.png \
+            || { echo "::error::logo missing from the built snap"; exit 1; }
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: visiontak-client-${{ matrix.platform }}
+          path: ${{ steps.build.outputs.snap }}
+          if-no-files-found: error
+
+  image:
+    name: SD card image
+    needs: snap
+    # Model assertions are always signed, so this cannot run without the brand key.
+    # Skipped rather than failed when the secrets are absent, so forks and PRs from
+    # contributors without the key still get a green build.
+    if: vars.BRAND_ID != '' && github.event_name != 'pull_request'
+    runs-on: ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: visiontak-client-arm64
+          path: dist
+
+      - name: Install tooling
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq imagemagick xz-utils
+          sudo snap install snapcraft --classic
+          sudo snap install ubuntu-image --classic
+
+      - name: Import the model signing key
+        env:
+          MODEL_SIGN_KEY: ${{ secrets.MODEL_SIGN_KEY }}
+        run: |
+          test -n "$MODEL_SIGN_KEY" || { echo "::error::MODEL_SIGN_KEY secret is empty"; exit 1; }
+          mkdir -p ~/.snap/gnupg && chmod 700 ~/.snap/gnupg
+          printf '%s' "$MODEL_SIGN_KEY" | GNUPGHOME=~/.snap/gnupg gpg --batch --import
+          GNUPGHOME=~/.snap/gnupg gpg --batch --list-secret-keys
+
+      - name: Build the image
+        env:
+          BRAND_ID: ${{ vars.BRAND_ID }}
+          MODEL_KEY: ${{ vars.MODEL_KEY }}
+        run: sh image/build-image.sh dist/visiontak-client_*_arm64.snap
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: visiontak-pi-sdcard-image
+          path: image/out/*.img.xz
+          if-no-files-found: error
+
+  release:
+    name: release
+    needs: snap
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*.snap
+          generate_release_notes: true

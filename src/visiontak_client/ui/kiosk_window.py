@@ -1,0 +1,413 @@
+"""The full-screen kiosk surface.
+
+One Wayland surface, one Gtk.Stack of WebViews (one per dashboard, created lazily and
+kept alive so switching is instant rather than a reload), plus the chooser overlay,
+a status toast and a blanking layer.
+"""
+
+from __future__ import annotations
+
+import logging
+
+import gi
+
+gi.require_version("Gtk", "4.0")
+gi.require_version("Gdk", "4.0")  # imported lazily in _black() below
+gi.require_version("WebKit", "6.0")
+from gi.repository import GLib, Gtk, WebKit  # noqa: E402
+
+from ..actions import Action, DigitAction  # noqa: E402
+from ..branding import logo_path  # noqa: E402
+from ..config import Config  # noqa: E402
+from ..models import Dashboard  # noqa: E402
+from .menu import DashboardMenu  # noqa: E402
+from .policy import HostAllowlist, make_policy_handler  # noqa: E402
+
+log = logging.getLogger(__name__)
+
+TOAST_TIMEOUT_SECONDS = 4
+_SPLASH_LOGO_PX = 320
+
+
+class KioskWindow(Gtk.ApplicationWindow):
+    def __init__(self, application: Gtk.Application, config: Config) -> None:
+        super().__init__(application=application, title="VisionTAK")
+        self._config = config
+        self._dashboards: list[Dashboard] = []
+        self._views: dict[str, WebKit.WebView] = {}
+        self._view_order: list[str] = []  # least- to most-recently used
+        self._current = -1
+        seed = [config.server_url] if config.server_url else []
+        seed += [h.strip() for h in config.allowed_hosts.split(",") if h.strip()]
+        self._allowlist = HostAllowlist(seed)
+        if self._allowlist.allows_any:
+            log.warning("allowed-hosts=* — navigation is unrestricted")
+        self._toast_source = 0
+        self._session = _build_network_session(config)
+
+        self.set_decorated(False)
+        self.fullscreen()
+
+        self._stack = Gtk.Stack(transition_type=Gtk.StackTransitionType.CROSSFADE)
+        self._stack.set_transition_duration(180)
+        self._placeholder = _build_splash("Waiting for dashboards…")
+        self._stack.add_named(self._placeholder, "__placeholder__")
+
+        self._menu = DashboardMenu(self._on_menu_activate)
+        self._toast = _build_toast()
+        self._info = _build_info_panel()
+        self._blank = _build_blank()
+        # Covers the webview until its first paint, so a slow board shows the brand
+        # rather than a white flash or a half-drawn dashboard.
+        self._loading = _build_splash("Connecting…")
+        self._loading.set_visible(False)
+        self._loading_ids: set[str] = set()
+
+        overlay = Gtk.Overlay()
+        overlay.set_child(self._stack)
+        for widget in (self._info, self._menu, self._toast, self._loading, self._blank):
+            overlay.add_overlay(widget)
+        self.set_child(overlay)
+
+    # -- dashboards --------------------------------------------------------
+
+    @property
+    def dashboards(self) -> list[Dashboard]:
+        return list(self._dashboards)
+
+    @property
+    def current_dashboard(self) -> Dashboard | None:
+        if 0 <= self._current < len(self._dashboards):
+            return self._dashboards[self._current]
+        return None
+
+    def set_dashboards(self, dashboards: list[Dashboard], *, keep_current: bool = True) -> None:
+        previous = self.current_dashboard
+        self._dashboards = dashboards
+        for dashboard in dashboards:
+            self._allowlist.allow(dashboard.url)
+        self._menu.set_dashboards(dashboards)
+        self._drop_stale_views({d.id for d in dashboards})
+
+        if not dashboards:
+            self._stack.set_visible_child(self._placeholder)
+            self._current = -1
+            self.toast("No dashboards available")
+            return
+        if keep_current and previous is not None:
+            for index, dashboard in enumerate(dashboards):
+                if dashboard.id == previous.id:
+                    self.show_index(index)
+                    return
+        self.show_index(0)
+
+    def _drop_stale_views(self, live_ids: set[str]) -> None:
+        for dashboard_id in [k for k in self._views if k not in live_ids]:
+            self._release_view(dashboard_id)
+
+    def _release_view(self, dashboard_id: str) -> None:
+        view = self._views.pop(dashboard_id, None)
+        if view is None:
+            return
+        if dashboard_id in self._view_order:
+            self._view_order.remove(dashboard_id)
+        self._loading_ids.discard(dashboard_id)
+        # Stop first: a view removed mid-load leaves its web process fetching.
+        view.stop_loading()
+        self._stack.remove(view)
+
+    def show_index(self, index: int) -> None:
+        if not self._dashboards:
+            return
+        index %= len(self._dashboards)
+        dashboard = self._dashboards[index]
+        self._current = index
+        self._stack.set_visible_child(self._view_for(dashboard))
+        self._sync_loading()
+        self._update_info()
+
+    def _view_for(self, dashboard: Dashboard) -> WebKit.WebView:
+        view = self._views.get(dashboard.id)
+        if view is not None:
+            self._touch(dashboard.id)
+            return view
+        view = WebKit.WebView(network_session=self._session)
+        view.set_settings(_build_web_settings(self._config))
+        view.set_background_color(_black())
+        view.connect("decide-policy", make_policy_handler(self._allowlist))
+        view.connect("context-menu", lambda *_: True)  # no right-click menu on a kiosk
+        view.connect("load-failed", self._on_load_failed)
+        view.connect("load-changed", self._on_load_changed, dashboard.id)
+        self._loading_ids.add(dashboard.id)
+        view.load_uri(dashboard.url)
+        self._views[dashboard.id] = view
+        self._stack.add_named(view, dashboard.id)
+        self._touch(dashboard.id)
+        self._evict_surplus()
+        return view
+
+    def _touch(self, dashboard_id: str) -> None:
+        """Mark a view as most recently used, for eviction ordering."""
+        if dashboard_id in self._view_order:
+            self._view_order.remove(dashboard_id)
+        self._view_order.append(dashboard_id)
+
+    def _evict_surplus(self) -> None:
+        """Keep at most max_live_views WebViews alive, dropping least-recently-used.
+
+        A hidden WebView is not idle: its web process keeps its render tree, timers and
+        any animation the page runs. On a 1 GiB board that is what pushes the system
+        into swap or the OOM killer, so trade a reload on return for the memory.
+        """
+        limit = max(1, self._config.max_live_views)
+        current = self.current_dashboard
+        current_id = current.id if current else None
+        while len(self._views) > limit:
+            victim = next(
+                (i for i in self._view_order if i != current_id and i in self._views),
+                None,
+            )
+            if victim is None:
+                return
+            log.info("evicting webview for %s (limit %d)", victim, limit)
+            self._release_view(victim)
+
+    def _on_load_changed(self, _view, event, dashboard_id: str) -> None:
+        if event == WebKit.LoadEvent.STARTED:
+            self._loading_ids.add(dashboard_id)
+        elif event == WebKit.LoadEvent.FINISHED:
+            self._loading_ids.discard(dashboard_id)
+        self._sync_loading()
+
+    def _sync_loading(self) -> None:
+        dashboard = self.current_dashboard
+        showing = dashboard is not None and dashboard.id in self._loading_ids
+        self._loading.set_visible(showing)
+
+    def _on_load_failed(self, _view, _event, uri: str, error) -> bool:
+        log.warning("failed to load %s: %s", uri, getattr(error, "message", error))
+        # Clear the splash even though WebKit normally still emits FINISHED after a
+        # failure: if it does not, the cover stays up forever and the kiosk looks hung
+        # rather than showing the error it is toasting about.
+        dashboard = self.current_dashboard
+        if dashboard is not None:
+            self._loading_ids.discard(dashboard.id)
+            self._sync_loading()
+        self.toast(f"Could not load {_host_of(uri)} — retrying")
+        return False
+
+    def reload_current(self) -> None:
+        dashboard = self.current_dashboard
+        if dashboard is None:
+            return
+        view = self._views.get(dashboard.id)
+        if view is not None:
+            view.reload_bypass_cache()
+            self.toast(f"Reloading {dashboard.name}")
+
+    # -- actions -----------------------------------------------------------
+
+    def handle_action(self, action: Action | DigitAction) -> None:
+        if isinstance(action, DigitAction):
+            self._jump_to_digit(action.digit)
+            return
+        handlers = {
+            Action.MENU_TOGGLE: lambda: self._menu.toggle(max(self._current, 0)),
+            Action.MENU_CLOSE: self._menu.close,
+            Action.MENU_UP: lambda: self._menu_step(-1),
+            Action.MENU_DOWN: lambda: self._menu_step(1),
+            Action.MENU_ACTIVATE: self._activate,
+            Action.DASHBOARD_NEXT: lambda: self._step(1),
+            Action.DASHBOARD_PREV: lambda: self._step(-1),
+            Action.DASHBOARD_RELOAD: self.reload_current,
+            Action.DASHBOARD_HOME: lambda: self.show_index(0),
+            Action.INFO_TOGGLE: self._toggle_info,
+            Action.BLANK_ON: lambda: self.set_blanked(True),
+            Action.BLANK_OFF: lambda: self.set_blanked(False),
+        }
+        handler = handlers.get(action)
+        if handler is not None:
+            handler()
+
+    def _menu_step(self, delta: int) -> None:
+        """Up/down open the chooser if it is closed, rather than doing nothing."""
+        if not self._menu.is_open:
+            self._menu.open(max(self._current, 0))
+            return
+        self._menu.move(delta)
+
+    def _activate(self) -> None:
+        """OK confirms a highlighted entry, or opens the chooser if it is closed."""
+        if self._menu.is_open:
+            self._menu.activate_selected()
+        else:
+            self._menu.open(max(self._current, 0))
+
+    def _step(self, delta: int) -> None:
+        if self._menu.is_open:
+            self._menu.move(delta)
+            return
+        if self._dashboards:
+            self.show_index(self._current + delta)
+            self.toast(self._dashboards[self._current].name)
+
+    def _jump_to_digit(self, digit: int) -> None:
+        index = (digit - 1) if digit > 0 else 9
+        if index < len(self._dashboards):
+            self._menu.close()
+            self.show_index(index)
+            self.toast(self._dashboards[index].name)
+
+    def _on_menu_activate(self, index: int) -> None:
+        self._menu.close()
+        self.show_index(index)
+
+    # -- chrome ------------------------------------------------------------
+
+    def set_blanked(self, blanked: bool) -> None:
+        self._blank.set_visible(blanked)
+
+    def toast(self, message: str) -> None:
+        self._toast.set_label(message)
+        self._toast.set_visible(True)
+        if self._toast_source:
+            GLib.source_remove(self._toast_source)
+        self._toast_source = GLib.timeout_add_seconds(TOAST_TIMEOUT_SECONDS, self._hide_toast)
+
+    def _hide_toast(self) -> bool:
+        self._toast.set_visible(False)
+        self._toast_source = 0
+        return GLib.SOURCE_REMOVE
+
+    def _toggle_info(self) -> None:
+        self._info.set_visible(not self._info.get_visible())
+        self._update_info()
+
+    def set_status(self, cec_status: str) -> None:
+        self._cec_status = cec_status
+        self._update_info()
+
+    def _update_info(self) -> None:
+        if not self._info.get_visible():
+            return
+        dashboard = self.current_dashboard
+        lines = [
+            f"Device      {self._config.device_id}",
+            f"Server      {self._config.server_url or '(unset)'}",
+            f"Dashboard   {dashboard.name if dashboard else '—'}"
+            + (f"  [{self._current + 1}/{len(self._dashboards)}]" if dashboard else ""),
+            f"CEC         {getattr(self, '_cec_status', 'starting')}",
+        ]
+        self._info.set_label("\n".join(lines))
+
+
+def _build_network_session(config: Config) -> WebKit.NetworkSession:
+    data_dir = config.cache_dir / "webkit"
+    data_dir.mkdir(parents=True, exist_ok=True)
+    session = WebKit.NetworkSession.new(str(data_dir), str(data_dir / "cache"))
+    session.set_itp_enabled(True)
+    return session
+
+
+def _accel_policy(mode: str):
+    policy = WebKit.HardwareAccelerationPolicy
+    if mode == "always":
+        return policy.ALWAYS
+    if mode == "never":
+        return policy.NEVER
+    # "auto" means "leave it to WebKit". WebKitGTK 6.0 removed ON_DEMAND — only ALWAYS
+    # and NEVER survive — so resolve it at runtime instead of naming a member that may
+    # not exist in the WebKit the device happens to ship.
+    return getattr(policy, "ON_DEMAND", policy.ALWAYS)
+
+
+def _build_web_settings(config: Config) -> WebKit.Settings:
+    wanted = {
+        "enable_developer_extras": False,
+        "enable_write_console_messages_to_stdout": False,
+        "javascript_can_open_windows_automatically": False,
+        "enable_back_forward_navigation_gestures": False,
+        "enable_html5_database": True,
+        "enable_html5_local_storage": True,
+        "hardware_acceleration_policy": _accel_policy(config.hardware_acceleration),
+        "user_agent": "VisionTAK-Kiosk (Ubuntu Core; Wayland)",
+        # Kiosk economies. A dashboard is never navigated back to, nothing here
+        # captures a camera, and the page cache exists to make the back button fast —
+        # all of it is memory a 1 GiB board would rather spend on the render tree.
+        "enable_page_cache": False,
+        "enable_media_stream": False,
+        "media_playback_requires_user_gesture": True,
+        "enable_smooth_scrolling": False,
+        # WebGL on VideoCore IV falls back to a software rasteriser that costs far more
+        # than it returns, so it follows the acceleration setting rather than the
+        # WebKit default.
+        "enable_webgl": config.hardware_acceleration == "always",
+    }
+    # WebKitGTK property sets differ between releases, and passing an unknown one to
+    # the constructor is a hard TypeError at startup. The Pi's WebKit is not
+    # necessarily the one this was written against, so filter to what exists.
+    available = {p.name.replace("-", "_") for p in WebKit.Settings.list_properties()}
+    unknown = sorted(set(wanted) - available)
+    if unknown:
+        log.debug("WebKit build has no such settings, ignoring: %s", ", ".join(unknown))
+    return WebKit.Settings(**{k: v for k, v in wanted.items() if k in available})
+
+
+def _black():
+    from gi.repository import Gdk
+
+    return Gdk.RGBA(red=0.0, green=0.0, blue=0.0, alpha=1.0)
+
+
+def _host_of(uri: str) -> str:
+    from urllib.parse import urlparse
+
+    return urlparse(uri).hostname or uri
+
+
+def _build_splash(message: str) -> Gtk.Widget:
+    """Logo over a black field. Used for both 'no dashboards yet' and 'connecting'."""
+    box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=28)
+    box.set_halign(Gtk.Align.CENTER)
+    box.set_valign(Gtk.Align.CENTER)
+    box.add_css_class("vt-splash")
+
+    path = logo_path()
+    if path is not None:
+        picture = Gtk.Picture.new_for_filename(str(path))
+        picture.set_can_shrink(True)
+        picture.set_content_fit(Gtk.ContentFit.CONTAIN)
+        picture.set_size_request(_SPLASH_LOGO_PX, _SPLASH_LOGO_PX)
+        box.append(picture)
+
+    label = Gtk.Label(label=message)
+    label.add_css_class("vt-placeholder")
+    label.set_justify(Gtk.Justification.CENTER)
+    box.append(label)
+    return box
+
+
+def _build_toast() -> Gtk.Label:
+    toast = Gtk.Label(label="")
+    toast.add_css_class("vt-toast")
+    toast.set_halign(Gtk.Align.CENTER)
+    toast.set_valign(Gtk.Align.END)
+    toast.set_visible(False)
+    return toast
+
+
+def _build_info_panel() -> Gtk.Label:
+    info = Gtk.Label(label="")
+    info.add_css_class("vt-info")
+    info.set_halign(Gtk.Align.START)
+    info.set_valign(Gtk.Align.START)
+    info.set_xalign(0.0)
+    info.set_visible(False)
+    return info
+
+
+def _build_blank() -> Gtk.Widget:
+    blank = Gtk.Box()
+    blank.add_css_class("vt-blank")
+    blank.set_visible(False)
+    return blank
