@@ -2,10 +2,16 @@ name: build
 
 on:
   push:
-    branches: [master]
+    branches: ["**"]
     tags: ["v*"]
   pull_request:
   workflow_dispatch:
+
+# Building on every branch push and again on the PR would run the same commit twice;
+# superseding in-flight runs for a ref keeps that from queueing up behind itself.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   test:
