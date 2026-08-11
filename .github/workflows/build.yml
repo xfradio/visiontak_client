@@ -108,7 +108,18 @@ jobs:
         env:
           BRAND_ID: ${{ vars.BRAND_ID }}
           MODEL_KEY: ${{ vars.MODEL_KEY }}
-        run: sh image/build-image.sh dist/visiontak-client_*_arm64.snap
+        # -x so a failure names the command that failed; the job log is the only
+        # diagnostic available for a build that cannot be reproduced off arm64.
+        run: sh -x image/build-image.sh dist/visiontak-client_*_arm64.snap
+
+      - name: Diagnostics on failure
+        if: failure()
+        run: |
+          echo "--- model ---";        cat image/work/model.json 2>/dev/null || true
+          echo "--- signing keys ---"; GNUPGHOME=~/.snap/gnupg gpg --batch --list-secret-keys 2>&1 || true
+          echo "--- snap keys ---";    snap keys 2>&1 || true
+          echo "--- gadget tree ---";  ls -la image/work/pi-gadget 2>/dev/null || true
+          echo "--- disk ---";         df -h / | tail -1
 
       - uses: actions/upload-artifact@v4
         with:

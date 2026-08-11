@@ -74,7 +74,12 @@ slots:
 EOF
 fi
 
-( cd "$WORK/pi-gadget" && snapcraft pack --destructive-mode --output "$WORK/pi-gadget.snap" )
+# Destructive mode installs build-packages onto this host, so it needs root. -E keeps
+# PATH (and /snap/bin with it) across the sudo.
+( cd "$WORK/pi-gadget" && sudo -E snapcraft pack --destructive-mode )
+GADGET_SNAP="$(find "$WORK/pi-gadget" -maxdepth 1 -name '*.snap' | head -1)"
+[ -n "$GADGET_SNAP" ] || { echo "gadget build produced no snap" >&2; exit 1; }
+echo "    gadget: $GADGET_SNAP"
 
 echo "==> model"
 sed -e "s/BRAND_ID/$BRAND_ID/g" \
@@ -84,9 +89,10 @@ snap sign -k "$MODEL_KEY" "$WORK/model.json" > "$WORK/model.assert"
 
 echo "==> ubuntu-image"
 # grade: dangerous is what allows the locally built, unsigned client and gadget in.
-ubuntu-image snap "$WORK/model.assert" -O "$OUT" \
-  --snap "$WORK/pi-gadget.snap" \
+sudo ubuntu-image snap "$WORK/model.assert" -O "$OUT" \
+  --snap "$GADGET_SNAP" \
   --snap "$CLIENT_SNAP"
+sudo chown -R "$(id -u):$(id -g)" "$OUT"
 
 echo "==> compress"
 IMG="$(find "$OUT" -maxdepth 1 -name '*.img' | head -1)"
