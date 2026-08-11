@@ -146,21 +146,33 @@ jobs:
           echo "signing works"
 
       - name: Build the image
+        shell: bash
         env:
           BRAND_ID: ${{ vars.BRAND_ID }}
           MODEL_KEY: ${{ vars.MODEL_KEY }}
         # -x so a failure names the command that failed; the job log is the only
         # diagnostic available for a build that cannot be reproduced off arm64.
-        run: sh -x image/build-image.sh dist/visiontak-client_*_arm64.snap
+        run: |
+          set -o pipefail
+          sh -x image/build-image.sh dist/visiontak-client_*_arm64.snap 2>&1 | tee /tmp/build.log
 
       - name: Diagnostics on failure
         if: failure()
+        shell: bash
         run: |
           echo "--- model ---";        cat image/work/model.json 2>/dev/null || true
           echo "--- signing keys ---"; GNUPGHOME=~/.snap/gnupg gpg --batch --list-secret-keys 2>&1 || true
           echo "--- snap keys ---";    snap keys 2>&1 || true
           echo "--- gadget tree ---";  ls -la image/work/pi-gadget 2>/dev/null || true
           echo "--- disk ---";         df -h / | tail -1
+          # Re-emit the tail as annotations. Workflow logs need an authenticated
+          # token to download, but annotations are readable from the public API —
+          # so this is what makes a failure diagnosable without hand-copying it.
+          if [ -f /tmp/build.log ]; then
+            tail -n 15 /tmp/build.log | while IFS= read -r line; do
+              echo "::error::${line}"
+            done
+          fi
 
       - uses: actions/upload-artifact@v4
         with:
