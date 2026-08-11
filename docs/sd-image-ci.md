@@ -42,8 +42,15 @@ Then in the repository settings:
 | Kind | Name | Value |
 |---|---|---|
 | Secret | `MODEL_SIGN_KEY` | the full armored block, `-----BEGIN` to `-----END` |
+| Secret | `MODEL_SIGN_PASSPHRASE` | the key's passphrase — omit only if it has none |
 | Variable | `BRAND_ID` | the account-id from `snapcraft whoami` |
 | Variable | `MODEL_KEY` | `visiontak` |
+
+`snapcraft create-key` prompts for a passphrase, so most keys have one. `snap sign`
+shells out to gpg with no passphrase arguments, so the only way it can work
+unattended is if gpg-agent already holds the secret — the workflow presets it. Without
+`MODEL_SIGN_PASSPHRASE` a protected key fails with *"Sorry, we are in batchmode - can't
+get input"*.
 
 `BRAND_ID` and `MODEL_KEY` are *variables*, not secrets — they are not sensitive and
 keeping them visible makes failures readable. The job keys off `vars.BRAND_ID`, so it

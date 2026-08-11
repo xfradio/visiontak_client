@@ -98,6 +98,7 @@ jobs:
       - name: Import the model signing key
         env:
           MODEL_SIGN_KEY: ${{ secrets.MODEL_SIGN_KEY }}
+          MODEL_SIGN_PASSPHRASE: ${{ secrets.MODEL_SIGN_PASSPHRASE }}
           MODEL_KEY: ${{ vars.MODEL_KEY }}
         run: |
           set -eu
@@ -113,14 +114,30 @@ jobs:
           sudo chown "$(id -u):$(id -g)" "/run/user/$(id -u)"
           chmod 700 "/run/user/$(id -u)"
 
-          # No pinentry exists here either, so a passphrased key must fall back to
-          # loopback rather than trying to open a prompt.
-          echo 'allow-loopback-pinentry' >> "$GNUPGHOME/gpg-agent.conf"
-          echo 'pinentry-mode loopback'  >> "$GNUPGHOME/gpg.conf"
+          # `snap sign` shells out to gpg with no passphrase arguments, so a protected
+          # key can only work if gpg-agent already holds the secret. Preset it rather
+          # than using loopback pinentry, which needs input gpg cannot ask for under
+          # --batch ("Sorry, we are in batchmode - can't get input").
+          {
+            echo 'allow-preset-passphrase'
+            echo 'allow-loopback-pinentry'
+            echo 'default-cache-ttl 7200'
+            echo 'max-cache-ttl 7200'
+          } >> "$GNUPGHOME/gpg-agent.conf"
 
           printf '%s' "$MODEL_SIGN_KEY" | gpg --batch --import
           gpgconf --launch gpg-agent
+          gpgconf --reload gpg-agent
           gpg --batch --list-secret-keys
+
+          if [ -n "${MODEL_SIGN_PASSPHRASE:-}" ]; then
+            KEYGRIP=$(gpg --batch --with-colons --with-keygrip \
+              --list-secret-keys "$MODEL_KEY" | awk -F: '/^grp:/ {print $10; exit}')
+            test -n "$KEYGRIP" || { echo "::error::could not read the keygrip for '$MODEL_KEY'"; exit 1; }
+            printf '%s' "$MODEL_SIGN_PASSPHRASE" \
+              | /usr/lib/gnupg/gpg-preset-passphrase --preset "$KEYGRIP"
+            echo "passphrase preset into gpg-agent"
+          fi
 
           # Prove the key can actually sign before spending ten minutes building a
           # gadget we would only throw away.
