@@ -52,6 +52,26 @@ git clone -q --depth 1 -b "$GADGET_BRANCH" https://github.com/canonical/pi-gadge
 if [ -f "$WORK/vendor-logo.png" ]; then
   mkdir -p "$WORK/pi-gadget/splash"
   cp "$WORK/vendor-logo.png" "$WORK/pi-gadget/splash/vendor-logo.png"
+
+  # Dropping the file in the tree is not enough. The gadget has a single part with
+  # `source: configs`, and snapcraft only auto-includes gadget.yaml — so a splash/
+  # directory at the project root is never staged, and the image silently keeps the
+  # stock Ubuntu logo while the build reports success.
+  awk '
+    /^slots:/ && !ins {
+      print "  splash:"
+      print "    plugin: dump"
+      print "    source: splash"
+      print "    organize:"
+      print "      vendor-logo.png: splash/vendor-logo.png"
+      print ""
+      ins = 1
+    }
+    { print }
+    END { if (!ins) exit 3 }
+  ' "$WORK/pi-gadget/snapcraft.yaml" > "$WORK/snapcraft.yaml.new" \
+    || { echo "could not find a slots: stanza to insert the splash part before" >&2; exit 1; }
+  mv "$WORK/snapcraft.yaml.new" "$WORK/pi-gadget/snapcraft.yaml"
 fi
 
 # The stock gadget sizes ubuntu-seed for Canonical's own image. This one additionally
@@ -89,6 +109,20 @@ fi
 GADGET_SNAP="$(find "$WORK/pi-gadget" -maxdepth 1 -name '*.snap' | head -1)"
 [ -n "$GADGET_SNAP" ] || { echo "gadget build produced no snap" >&2; exit 1; }
 echo "    gadget: $GADGET_SNAP"
+
+# Assert the logo is actually inside the snap. A gadget that builds cleanly without it
+# produces an image that boots to the stock Ubuntu splash — a failure only visible on
+# a television, which is the worst place to discover it.
+if [ -f "$WORK/vendor-logo.png" ]; then
+  rm -rf "$WORK/gadget-check"
+  unsquashfs -q -f -d "$WORK/gadget-check" "$GADGET_SNAP" splash >/dev/null 2>&1 || true
+  if [ -f "$WORK/gadget-check/splash/vendor-logo.png" ]; then
+    echo "    splash: vendor-logo.png present in the gadget"
+  else
+    echo "vendor-logo.png did not make it into the gadget snap" >&2
+    exit 1
+  fi
+fi
 
 echo "==> model"
 STAMP="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
