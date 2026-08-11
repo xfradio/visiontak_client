@@ -54,6 +54,15 @@ if [ -f "$WORK/vendor-logo.png" ]; then
   cp "$WORK/vendor-logo.png" "$WORK/pi-gadget/splash/vendor-logo.png"
 fi
 
+# The stock gadget sizes ubuntu-seed for Canonical's own image. This one additionally
+# seeds ubuntu-frame, mesa-2404, gnome-46-2404, gtk-common-themes and the client —
+# about 1.4 GiB against a 1200M partition. mkfs reports only "Disk full" without
+# naming the structure, so the cause is not obvious from the failure.
+SEED_SIZE="${SEED_SIZE:-2500M}"
+sed -i "s/^\( *\)size: 1200M/\1size: $SEED_SIZE/" "$WORK/pi-gadget/gadget.yaml"
+echo "    ubuntu-seed sized to $SEED_SIZE"
+grep -n 'size:' "$WORK/pi-gadget/gadget.yaml"
+
 # /dev/cec0 is covered by no built-in interface. Publishing it as a custom-device slot
 # keeps CEC an auditable property of the signed image instead of dropping the client to
 # classic confinement. Appended only if the gadget does not already declare slots.
