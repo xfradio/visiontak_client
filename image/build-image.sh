@@ -82,10 +82,20 @@ GADGET_SNAP="$(find "$WORK/pi-gadget" -maxdepth 1 -name '*.snap' | head -1)"
 echo "    gadget: $GADGET_SNAP"
 
 echo "==> model"
-sed -e "s/BRAND_ID/$BRAND_ID/g" \
-    -e "s/TIMESTAMP/$(date -u +%Y-%m-%dT%H:%M:%SZ)/" \
+STAMP="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+sed -e "s|BRAND_ID|$BRAND_ID|g" -e "s|TIMESTAMP|$STAMP|" \
     "$HERE/model.json" > "$WORK/model.json"
-snap sign -k "$MODEL_KEY" "$WORK/model.json" > "$WORK/model.assert"
+echo "    model json written; signing with key '$MODEL_KEY'"
+cat "$WORK/model.json"
+
+# snap sign is quiet about *why* it refuses, so keep its stderr rather than letting
+# the redirection swallow it with the assertion.
+if ! snap sign -k "$MODEL_KEY" "$WORK/model.json" > "$WORK/model.assert" 2> "$WORK/sign.err"; then
+  echo "snap sign failed:" >&2
+  cat "$WORK/sign.err" >&2
+  exit 1
+fi
+echo "    model signed ($(wc -c < "$WORK/model.assert") bytes)"
 
 echo "==> ubuntu-image"
 # grade: dangerous is what allows the locally built, unsigned client and gadget in.

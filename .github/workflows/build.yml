@@ -168,10 +168,12 @@ jobs:
           # Re-emit the tail as annotations. Workflow logs need an authenticated
           # token to download, but annotations are readable from the public API —
           # so this is what makes a failure diagnosable without hand-copying it.
+          # One annotation carrying the whole tail: GitHub only surfaces a handful of
+          # per-line annotations, which silently dropped the actual error last time.
           if [ -f /tmp/build.log ]; then
-            tail -n 15 /tmp/build.log | while IFS= read -r line; do
-              echo "::error::${line}"
-            done
+            ENC=$(tail -n 60 /tmp/build.log \
+              | sed -z 's/%/%25/g; s/\r/%0D/g; s/\n/%0A/g')
+            echo "::error title=build tail::${ENC}"
           fi
 
       - uses: actions/upload-artifact@v4
