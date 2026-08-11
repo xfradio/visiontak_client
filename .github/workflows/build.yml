@@ -98,11 +98,35 @@ jobs:
       - name: Import the model signing key
         env:
           MODEL_SIGN_KEY: ${{ secrets.MODEL_SIGN_KEY }}
+          MODEL_KEY: ${{ vars.MODEL_KEY }}
         run: |
+          set -eu
           test -n "$MODEL_SIGN_KEY" || { echo "::error::MODEL_SIGN_KEY secret is empty"; exit 1; }
-          mkdir -p ~/.snap/gnupg && chmod 700 ~/.snap/gnupg
-          printf '%s' "$MODEL_SIGN_KEY" | GNUPGHOME=~/.snap/gnupg gpg --batch --import
-          GNUPGHOME=~/.snap/gnupg gpg --batch --list-secret-keys
+          export GNUPGHOME="$HOME/.snap/gnupg"
+          mkdir -p "$GNUPGHOME" && chmod 700 "$GNUPGHOME"
+
+          # GnuPG puts the gpg-agent socket under /run/user/$UID when that path exists.
+          # A hosted runner has no systemd user session, so it does not — and every
+          # signature then fails with the singularly unhelpful
+          # "gpg: signing failed: No such file or directory".
+          sudo mkdir -p "/run/user/$(id -u)"
+          sudo chown "$(id -u):$(id -g)" "/run/user/$(id -u)"
+          chmod 700 "/run/user/$(id -u)"
+
+          # No pinentry exists here either, so a passphrased key must fall back to
+          # loopback rather than trying to open a prompt.
+          echo 'allow-loopback-pinentry' >> "$GNUPGHOME/gpg-agent.conf"
+          echo 'pinentry-mode loopback'  >> "$GNUPGHOME/gpg.conf"
+
+          printf '%s' "$MODEL_SIGN_KEY" | gpg --batch --import
+          gpgconf --launch gpg-agent
+          gpg --batch --list-secret-keys
+
+          # Prove the key can actually sign before spending ten minutes building a
+          # gadget we would only throw away.
+          echo probe | gpg --batch --yes --local-user "$MODEL_KEY" --detach-sign -o /dev/null \
+            || { echo "::error::imported key cannot sign — does MODEL_KEY ('$MODEL_KEY') match the key UID above?"; exit 1; }
+          echo "signing works"
 
       - name: Build the image
         env:
