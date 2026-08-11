@@ -1,7 +1,12 @@
 name: visiontak-client
 base: core24
 adopt-info: visiontak-client
+title: VisionTAK Client
 summary: VisionTAK dashboard kiosk for Ubuntu Core
+website: https://xfradio.net
+contact: https://github.com/xfradio/visiontak_client/issues
+issues: https://github.com/xfradio/visiontak_client/issues
+source-code: https://github.com/xfradio/visiontak_client
 description: |
   A full-screen, CEC-driven client for VisionTAK Server, built for unattended
   displays running Ubuntu Core.

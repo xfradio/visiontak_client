@@ -108,7 +108,11 @@ echo "    model signed ($(wc -c < "$WORK/model.assert") bytes)"
 
 echo "==> ubuntu-image"
 # grade: dangerous is what allows the locally built, unsigned client and gadget in.
+# --validation=ignore is the behaviour this build already relies on, and ubuntu-image
+# warns that the default is changing. State it rather than inheriting a default that
+# will flip to enforce — locally built, unsigned snaps have no validation sets to meet.
 sudo ubuntu-image snap "$WORK/model.assert" -O "$OUT" \
+  --validation=ignore \
   --snap "$GADGET_SNAP" \
   --snap "$CLIENT_SNAP"
 sudo chown -R "$(id -u):$(id -g)" "$OUT"
