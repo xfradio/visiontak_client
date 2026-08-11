@@ -4,6 +4,7 @@ adopt-info: visiontak-client
 title: VisionTAK Client
 summary: VisionTAK dashboard kiosk for Ubuntu Core
 website: https://xfradio.net
+license: Apache-2.0
 contact: https://github.com/xfradio/visiontak_client/issues
 issues: https://github.com/xfradio/visiontak_client/issues
 source-code: https://github.com/xfradio/visiontak_client

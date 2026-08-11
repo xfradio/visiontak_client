@@ -62,6 +62,10 @@ class KioskApplication(Gtk.Application):
         window.add_controller(controller)
 
     def _on_key_pressed(self, _controller, keyval: int, _keycode: int, _state) -> bool:
+        # During setup the text field owns the keyboard: "h" is a character being
+        # typed into a hostname, not the home-dashboard action.
+        if self.window is not None and self.window.setup_active:
+            return False
         name = Gdk.keyval_name(keyval) or ""
         action = action_for_key_name(name)
         if action is None:

@@ -22,6 +22,7 @@ from ..config import Config  # noqa: E402
 from ..models import Dashboard  # noqa: E402
 from .menu import DashboardMenu  # noqa: E402
 from .policy import HostAllowlist, make_policy_handler  # noqa: E402
+from .setup import SetupScreen  # noqa: E402
 
 log = logging.getLogger(__name__)
 
@@ -53,6 +54,12 @@ class KioskWindow(Gtk.ApplicationWindow):
         self._placeholder = _build_splash("Waiting for dashboards…")
         self._stack.add_named(self._placeholder, "__placeholder__")
 
+        # A display with no server address configured cannot do anything useful, and
+        # there is no other way to tell it one without a console. Ask on screen.
+        self._setup = SetupScreen(self._on_setup_submit)
+        self._stack.add_named(self._setup, "__setup__")
+        self._needs_setup = not config.server_url
+
         self._menu = DashboardMenu(self._on_menu_activate)
         self._toast = _build_toast()
         self._info = _build_info_panel()
@@ -69,6 +76,11 @@ class KioskWindow(Gtk.ApplicationWindow):
             overlay.add_overlay(widget)
         self.set_child(overlay)
 
+        if self._needs_setup:
+            log.info("no server-url configured — showing first-run setup")
+            self._stack.set_visible_child(self._setup)
+            self._setup.focus_entry()
+
     # -- dashboards --------------------------------------------------------
 
     @property
@@ -81,7 +93,30 @@ class KioskWindow(Gtk.ApplicationWindow):
             return self._dashboards[self._current]
         return None
 
+    @property
+    def setup_active(self) -> bool:
+        """True while the setup field owns the keyboard, so key actions stand down."""
+        return self._needs_setup
+
+    def _on_setup_submit(self, url: str) -> str | None:
+        """Persist the address. Returns an error to show, or None on success."""
+        from ..config import persist
+
+        try:
+            persist("server-url", url)
+        except Exception as exc:  # noqa: BLE001 - surfaced on screen, not swallowed
+            log.error("could not save server-url: %s", exc)
+            return f"Could not save: {exc}"
+        log.info("server-url set to %s from the setup screen", url)
+        # Under a snap the configure hook validates this and restarts the daemon, so
+        # the kiosk comes back already configured. Elsewhere it applies on next start.
+        return None
+
     def set_dashboards(self, dashboards: list[Dashboard], *, keep_current: bool = True) -> None:
+        if self._needs_setup:
+            # Nothing the server says is interesting until it has been told where the
+            # server is; leaving setup on screen beats flashing a placeholder over it.
+            return
         previous = self.current_dashboard
         self._dashboards = dashboards
         for dashboard in dashboards:

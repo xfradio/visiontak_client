@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 import os
 import socket
+import subprocess
 from dataclasses import dataclass, fields
 from pathlib import Path
 from typing import Any
@@ -101,6 +102,64 @@ def _from_mapping(source: dict[str, Any], *, key_style: str) -> dict[str, Any]:
             continue
         out[field.name] = source[key]
     return out
+
+
+def normalise_server_url(raw: str) -> str:
+    """Make a typed address usable, or return '' if it cannot be.
+
+    People type "10.0.0.5:3000" on a remote, not "http://10.0.0.5:3000/". Accepting
+    only the pedantic form would fail exactly the users the setup screen exists for.
+    Lives here rather than beside the screen so it is testable without GTK.
+    """
+    text = raw.strip()
+    if not text:
+        return ""
+    if "://" not in text:
+        text = f"http://{text}"
+    # Split before trimming slashes: stripping them first turns "http://" into
+    # "http:", which then looks scheme-less and becomes "http://http:".
+    scheme, _, rest = text.partition("://")
+    rest = rest.rstrip("/")
+    if scheme.lower() not in {"http", "https"} or not rest:
+        return ""
+    return f"{scheme.lower()}://{rest}"
+
+
+def persist(
+    key: str,
+    value: str,
+    *,
+    data_dir: Path | None = None,
+    environ: dict[str, str] | None = None,
+) -> None:
+    """Write one setting back to wherever this deployment reads it from.
+
+    Under a snap the source of truth is snapd's own configuration, not the file: the
+    configure hook regenerates config.json from `snap set` values, so a value written
+    straight to the file is discarded the next time anyone touches the configuration.
+    Going through snapctl also runs the hook, which validates the result and restarts
+    the daemon — exactly the behaviour wanted after first-run setup.
+    """
+    environ = dict(os.environ if environ is None else environ)
+
+    if environ.get("SNAP_INSTANCE_NAME") or environ.get("SNAP_NAME"):
+        subprocess.run(["snapctl", "set", f"{key}={value}"], check=True, timeout=30)
+        return
+
+    base = Path(environ.get("VISIONTAK_DATA_DIR") or ".")
+    path = (data_dir or base) / CONFIG_BASENAME
+    current: dict[str, Any] = {}
+    if path.is_file():
+        try:
+            current = json.loads(path.read_text())
+        except json.JSONDecodeError:
+            current = {}
+    current[key] = value
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(".json.tmp")
+    tmp.write_text(json.dumps(current, indent=2) + "\n")
+    tmp.chmod(0o600)
+    tmp.replace(path)
 
 
 def load(data_dir: Path | None = None, environ: dict[str, str] | None = None) -> Config:

@@ -83,6 +83,26 @@ sed -i "s/^\( *\)size: 1200M/\1size: $SEED_SIZE/" "$WORK/pi-gadget/gadget.yaml"
 echo "    ubuntu-seed sized to $SEED_SIZE"
 grep -n 'size:' "$WORK/pi-gadget/gadget.yaml"
 
+# Boot straight into the kiosk. Otherwise first boot stops at console-conf waiting for
+# a keyboard, which is exactly what a wall display does not have — and the client's own
+# setup screen asks for the one thing that genuinely cannot be defaulted, the server
+# address, on screen instead.
+#
+# Chosen over a signed system-user assertion deliberately: that route needs a password
+# hash or SSH key baked into the image, and this repository is public. Disabling
+# console-conf needs no credential at all. The trade-off is that the device has no
+# login; add a system-user assertion if you need SSH access to a field unit.
+if ! grep -q '^defaults:' "$WORK/pi-gadget/gadget.yaml"; then
+  cat >> "$WORK/pi-gadget/gadget.yaml" <<'EOF'
+
+defaults:
+  system:
+    console-conf:
+      disable: true
+EOF
+  echo "    console-conf disabled — first boot goes straight to the kiosk"
+fi
+
 # /dev/cec0 is covered by no built-in interface. Publishing it as a custom-device slot
 # keeps CEC an auditable property of the signed image instead of dropping the client to
 # classic confinement. Appended only if the gadget does not already declare slots.
