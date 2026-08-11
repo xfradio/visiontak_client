@@ -61,6 +61,18 @@ stays skipped until you set it.
 > `pull_request` events for that reason. Anyone who obtains it can sign images that
 > claim to be yours — revoke and re-register if it ever leaks.
 
+## Why the model lists more than you expect
+
+`ubuntu-image` does not resolve content providers implicitly — every snap that
+satisfies a content interface has to be named in the model, or it refuses with
+*"prerequisites need to be added explicitly"*. So `image/model.json` carries
+`mesa-2404` (`gpu-2404`, for Frame), plus `gnome-46-2404`, `gtk-common-themes` and
+`bare`, which the client pulls in through the gnome extension.
+
+If you add a snap to the image later and the build fails this way, the missing
+provider is named in the error — add it to the model rather than to the `--snap`
+arguments.
+
 ## What the job builds
 
 1. Pads `assets/visiontak-logo.png` to 800×400 on black — the splash wants 2:1, and

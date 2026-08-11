@@ -12,6 +12,12 @@
     { "name": "pi-kernel",       "type": "kernel", "default-channel": "24/stable" },
     { "name": "core24",          "type": "base",   "default-channel": "latest/stable" },
     { "name": "snapd",           "type": "snapd",  "default-channel": "latest/stable" },
+
+    { "name": "bare",              "type": "base", "default-channel": "latest/stable" },
+    { "name": "mesa-2404",         "type": "app",  "default-channel": "latest/stable" },
+    { "name": "gnome-46-2404",     "type": "app",  "default-channel": "latest/stable" },
+    { "name": "gtk-common-themes", "type": "app",  "default-channel": "latest/stable" },
+
     { "name": "ubuntu-frame",    "type": "app",    "default-channel": "24/stable" },
     { "name": "visiontak-client","type": "app",    "default-channel": "latest/stable" }
   ],
