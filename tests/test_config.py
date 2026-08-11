@@ -67,3 +67,28 @@ def test_malformed_config_file_is_a_clear_error(tmp_path):
 def test_write_snap_config_round_trips(tmp_path):
     config_module.write_snap_config(tmp_path, {"server-url": "https://vt.example"})
     assert config_module.load(tmp_path, environ={}).server_url == "https://vt.example"
+
+
+def test_small_board_gets_the_low_memory_profile(tmp_path, monkeypatch):
+    """A field unit has no login, so nobody can `snap set` it back from swapping."""
+    monkeypatch.setattr(config_module, "_total_memory_mib", lambda: 950)
+    cfg = config_module.load(tmp_path, environ={})
+    assert cfg.max_live_views == 1
+    assert cfg.hardware_acceleration == "never"
+
+
+def test_explicit_settings_beat_the_low_memory_profile(tmp_path, monkeypatch):
+    monkeypatch.setattr(config_module, "_total_memory_mib", lambda: 950)
+    (tmp_path / config_module.CONFIG_BASENAME).write_text(
+        '{"max-live-views": "3", "hardware-acceleration": "always"}'
+    )
+    cfg = config_module.load(tmp_path, environ={})
+    assert cfg.max_live_views == 3
+    assert cfg.hardware_acceleration == "always"
+
+
+def test_larger_boards_keep_the_defaults(tmp_path, monkeypatch):
+    monkeypatch.setattr(config_module, "_total_memory_mib", lambda: 3800)
+    cfg = config_module.load(tmp_path, environ={})
+    assert cfg.max_live_views == 3
+    assert cfg.hardware_acceleration == "auto"

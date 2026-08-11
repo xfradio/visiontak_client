@@ -37,7 +37,10 @@ echo "==> boot splash"
 # The gadget wants a 2:1 image; the master is square, so pad rather than stretch —
 # a non-uniform scale on a hexagon is obvious on a wall display.
 if [ -f "$REPO/assets/visiontak-logo.png" ]; then
-  convert "$REPO/assets/visiontak-logo.png" -resize 400x400 -background black \
+  # Keep the mark well inside the canvas. Televisions overscan HDMI by a few percent
+  # and plymouth scales this to the panel, so a logo filling its canvas gets clipped
+  # at the edges on real hardware — which is exactly what happened on first boot.
+  convert "$REPO/assets/visiontak-logo.png" -resize 300x300 -background black \
     -gravity center -extent 800x400 "$WORK/vendor-logo.png"
 else
   echo "no assets/visiontak-logo.png — image will keep the stock Ubuntu splash" >&2
@@ -92,6 +95,11 @@ grep -n 'size:' "$WORK/pi-gadget/gadget.yaml"
 # hash or SSH key baked into the image, and this repository is public. Disabling
 # console-conf needs no credential at all. The trade-off is that the device has no
 # login; add a system-user assertion if you need SSH access to a field unit.
+#
+# Ubuntu Frame's daemon is OFF by default: installing it is not the same as running
+# it. Without this the image boots with no compositor at all, the client cannot get a
+# Wayland surface, and tty1 shows a bare login prompt instead of the kiosk. Defaults
+# are keyed by snap-id, hence the opaque key — it is ubuntu-frame.
 if ! grep -q '^defaults:' "$WORK/pi-gadget/gadget.yaml"; then
   cat >> "$WORK/pi-gadget/gadget.yaml" <<'EOF'
 
@@ -99,8 +107,13 @@ defaults:
   system:
     console-conf:
       disable: true
+  # ubuntu-frame
+  BPZbvWzvoMTrpec4goCXlckLe2IhfthK:
+    daemon: true
+    cursor: none
+    idle-timeout: 0
 EOF
-  echo "    console-conf disabled — first boot goes straight to the kiosk"
+  echo "    console-conf disabled, ubuntu-frame set to run as a daemon"
 fi
 
 # /dev/cec0 is covered by no built-in interface. Publishing it as a custom-device slot

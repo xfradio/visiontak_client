@@ -8,6 +8,7 @@ so a developer can run the kiosk on a desktop without snapd.
 from __future__ import annotations
 
 import json
+import logging
 import os
 import socket
 import subprocess
@@ -104,6 +105,24 @@ def _from_mapping(source: dict[str, Any], *, key_style: str) -> dict[str, Any]:
     return out
 
 
+log = logging.getLogger(__name__)
+
+# A Pi 3 B+ reports about 950 MiB once the GPU split is taken out; a Pi 4 reports
+# 1900+. Anything under this is treated as the small board.
+LOW_MEMORY_MIB = 1536
+
+
+def _total_memory_mib() -> int | None:
+    """Total RAM in MiB, or None where /proc/meminfo is not readable."""
+    try:
+        for line in Path("/proc/meminfo").read_text().splitlines():
+            if line.startswith("MemTotal:"):
+                return int(line.split()[1]) // 1024
+    except (OSError, ValueError, IndexError):
+        return None
+    return None
+
+
 def normalise_server_url(raw: str) -> str:
     """Make a typed address usable, or return '' if it cannot be.
 
@@ -176,6 +195,23 @@ def load(data_dir: Path | None = None, environ: dict[str, str] | None = None) ->
     values.update(_from_mapping(environ, key_style="env"))
 
     values.setdefault("device_id", socket.gethostname())
+
+    # A field unit boots with console-conf disabled and no login, so nobody can run
+    # `snap set` on it. Defaults sized for a Pi 4 would swap or OOM a Pi 3 B+ with
+    # nobody able to intervene, so read the board instead. Explicit settings win.
+    total_mib = _total_memory_mib()
+    if total_mib is not None and total_mib < LOW_MEMORY_MIB:
+        if "max_live_views" not in values:
+            values["max_live_views"] = 1
+        if "hardware_acceleration" not in values:
+            values["hardware_acceleration"] = "never"
+        log.info(
+            "%d MiB of RAM detected — using the low-memory profile "
+            "(max_live_views=%s, hardware_acceleration=%s)",
+            total_mib,
+            values["max_live_views"],
+            values["hardware_acceleration"],
+        )
     # `from __future__ import annotations` turns field.type into a string, so derive the
     # target type from each field's default instead.
     for field in fields(Config):
