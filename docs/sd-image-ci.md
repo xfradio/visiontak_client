@@ -124,3 +124,34 @@ BRAND_ID=<account-id> MODEL_KEY=visiontak \
 
 It refuses to run on x86 — the gadget cannot be cross-built for the same reason the
 client cannot; see [`arm64-build.md`](arm64-build.md).
+
+## Interfaces that need connecting
+
+Publishing a slot in the gadget does not connect it. snapd auto-connects only where a
+built-in rule or a store snap-declaration allows it, and `custom-device` has neither —
+so the image lists the connection in `gadget.yaml` for snapd to make at first boot.
+
+If CEC still does nothing, check it on the device:
+
+```sh
+snap connections visiontak-client | grep hdmi-cec   # slot should be pi:hdmi-cec
+ls -l /dev/cec*
+```
+
+An unconnected plug is fixable in place, now that the image has SSH:
+
+```sh
+sudo snap connect visiontak-client:hdmi-cec pi:hdmi-cec
+sudo snap restart visiontak-client
+```
+
+Press `i` on a keyboard afterwards: the panel should read `KernelCecBackend` rather
+than `NullCecBackend (/dev/cec0 missing…)`.
+
+The same applies to `network-setup-observe`, which DHCP discovery needs in order to
+read the lease:
+
+```sh
+snap connections visiontak-client | grep network-setup-observe
+sudo snap connect visiontak-client:network-setup-observe
+```

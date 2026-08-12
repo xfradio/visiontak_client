@@ -152,6 +152,15 @@ slots:
     udev-tagging:
       - kernel: cec[0-9]
         subsystem: cec
+
+# Publishing the slot is not enough. snapd will not auto-connect custom-device on its
+# own — it needs either a store snap-declaration or this — so without it the plug sits
+# unconnected, /dev/cec0 is unreachable, the client falls back to NullCecBackend and
+# the remote does nothing. The gadget lists connections to make for seeded snaps at
+# first boot, which is exactly this case.
+connections:
+  - plug: visiontak-client:hdmi-cec
+    slot: hdmi-cec
 EOF
 fi
 
