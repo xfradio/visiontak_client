@@ -91,12 +91,9 @@ snap connections visiontak-client | grep network-setup-observe
 
 `POST /api/v1/client/register` (unauthenticated — the one endpoint a device without a
 token may call), sending `deviceId`, `deviceType: raspberry_pi` and `label`.
-whichever of `token`, `apiToken`, `api_token`, `accessToken` or `access_token` the
-response carries, because the contract is not documented server-side yet and a first
-boot on a headless device is a bad place to discover a naming difference.
 
-A server that enrols without issuing a token is treated as success — some deployments
-authorise by device-id alone.
+Once a token is held, it goes on every other endpoint as
+`Authorization: Bearer <token>`.
 
 ### Approval is a human step
 
