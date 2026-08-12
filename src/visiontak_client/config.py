@@ -21,6 +21,13 @@ from typing import Any
 
 CONFIG_BASENAME = "config.json"
 
+# Written by the client itself — a discovered address, an issued token, a generated
+# device id. Deliberately NOT config.json: the configure hook regenerates that file
+# from snapd's configuration, so anything the client put there is dropped the next time
+# the hook runs. That produced a device which registered successfully and then came
+# back to the setup screen with its address gone.
+STATE_BASENAME = "self-config.json"
+
 
 @dataclass(frozen=True)
 class Config:
@@ -220,28 +227,20 @@ def persist(
     data_dir: Path | None = None,
     environ: dict[str, str] | None = None,
 ) -> None:
-    """Write one setting back to wherever this deployment reads it from.
+    """Record one setting the client worked out for itself.
 
-    Under a snap the source of truth is snapd's own configuration, not the file: the
-    configure hook regenerates config.json from `snap set` values, so a value written
-    straight to the file is discarded the next time anyone touches the configuration.
-    Going through snapctl also runs the hook, which validates the result and restarts
-    the daemon — exactly the behaviour wanted after first-run setup.
+    Kept in self-config.json rather than config.json, which the configure hook owns
+    and regenerates from `snap set` values. It is also mirrored into snapd's config
+    where possible, so `snap get` shows the truth and an admin can override it — but
+    that is best effort, and the file is what the client relies on.
     """
     environ = dict(os.environ if environ is None else environ)
 
-    if environ.get("SNAP_INSTANCE_NAME") or environ.get("SNAP_NAME"):
-        try:
-            subprocess.run(["snapctl", "set", f"{key}={value}"], check=True, timeout=30)
-            return
-        except (subprocess.SubprocessError, OSError) as exc:
-            # snapctl set is not always available outside a hook. Falling back to the
-            # file keeps the setting for this boot rather than losing it silently; the
-            # next `snap set` regenerates config.json and takes over again.
-            log.warning("snapctl set %s failed (%s); writing config.json instead", key, exc)
-
-    base = Path(environ.get("VISIONTAK_DATA_DIR") or ".")
-    path = (data_dir or base) / CONFIG_BASENAME
+    # Always record it in our own file. Writing only through snapctl would lose the
+    # value whenever snapctl is unavailable, and writing only to config.json would
+    # lose it the next time the configure hook regenerates that file.
+    base = Path(environ.get("SNAP_DATA") or environ.get("VISIONTAK_DATA_DIR") or ".")
+    path = (data_dir or base) / STATE_BASENAME
     current: dict[str, Any] = {}
     if path.is_file():
         try:
@@ -255,6 +254,14 @@ def persist(
     tmp.chmod(0o600)
     tmp.replace(path)
 
+    # Mirror into snapd so `snap get` reflects reality. Failure is not fatal: the
+    # value is already durable above, and snapctl is not always usable outside a hook.
+    if environ.get("SNAP_INSTANCE_NAME") or environ.get("SNAP_NAME"):
+        try:
+            subprocess.run(["snapctl", "set", f"{key}={value}"], check=True, timeout=30)
+        except (subprocess.SubprocessError, OSError) as exc:
+            log.warning("could not mirror %s into snap config: %s", key, exc)
+
 
 def load(data_dir: Path | None = None, environ: dict[str, str] | None = None) -> Config:
     environ = dict(os.environ if environ is None else environ)
@@ -262,6 +269,17 @@ def load(data_dir: Path | None = None, environ: dict[str, str] | None = None) ->
     path = (data_dir or base) / CONFIG_BASENAME
 
     values: dict[str, Any] = {}
+
+    # Client-written state first, so an explicit `snap set` still overrides it.
+    state_path = (data_dir or base) / STATE_BASENAME
+    if state_path.is_file():
+        try:
+            values.update(_from_mapping(json.loads(state_path.read_text()), key_style="snap"))
+        except (json.JSONDecodeError, ValueError) as exc:
+            # Corrupt self-config must not stop a display starting; it is recoverable
+            # by rediscovery or the setup screen.
+            log.warning("ignoring unreadable %s: %s", state_path, exc)
+
     if path.is_file():
         try:
             values.update(_from_mapping(json.loads(path.read_text()), key_style="snap"))

@@ -202,13 +202,62 @@ if ! snap sign -k "$MODEL_KEY" "$WORK/model.json" > "$WORK/model.assert" 2> "$WO
 fi
 echo "    model signed ($(wc -c < "$WORK/model.assert") bytes)"
 
+echo "==> system-user assertion"
+# Gives the image an account to SSH into. console-conf stays disabled, so the kiosk
+# still comes up on its own; this only adds a way in when something needs looking at
+# on the device — which four separate faults have now needed.
+#
+# Key-only: no password is generated or stored. Only the holder of the matching
+# private key can log in, so publishing the public half in this repository costs
+# nothing.
+SYSTEM_USER="${SYSTEM_USER:-visiontak}"
+SYSTEM_USER_EMAIL="${SYSTEM_USER_EMAIL:-visiontak@xfradio.net}"
+KEYS_FILE="${SSH_KEYS_FILE:-$HERE/authorized-keys.pub}"
+ASSERTION_ARGS=""
+
+if [ -s "$KEYS_FILE" ]; then
+  # JSON array of the non-comment, non-empty lines.
+  SSH_KEYS_JSON=$(awk 'NF && $0 !~ /^#/ {
+      gsub(/"/, "\\\"")
+      printf "%s\"%s\"", (n++ ? "," : ""), $0
+    }' "$KEYS_FILE")
+  cat > "$WORK/system-user.json" <<EOF
+{
+  "type": "system-user",
+  "authority-id": "$BRAND_ID",
+  "brand-id": "$BRAND_ID",
+  "email": "$SYSTEM_USER_EMAIL",
+  "username": "$SYSTEM_USER",
+  "name": "VisionTAK device access",
+  "ssh-keys": [$SSH_KEYS_JSON],
+  "series": ["16"],
+  "models": ["visiontak-pi-arm64"],
+  "since": "$STAMP",
+  "until": "$(date -u -d '+5 years' +%Y-%m-%dT%H:%M:%SZ)"
+}
+EOF
+  if snap sign -k "$MODEL_KEY" "$WORK/system-user.json" > "$WORK/system-user.assert" \
+       2> "$WORK/system-user.err"; then
+    ASSERTION_ARGS="--assertion $WORK/system-user.assert"
+    echo "    ssh access for '$SYSTEM_USER' signed"
+  else
+    # Not fatal: an image without SSH still boots and runs the kiosk.
+    echo "    could not sign the system-user assertion, continuing without SSH:" >&2
+    cat "$WORK/system-user.err" >&2
+  fi
+else
+  echo "    no $KEYS_FILE — image will have no login" >&2
+fi
+
 echo "==> ubuntu-image"
 # grade: dangerous is what allows the locally built, unsigned client and gadget in.
 # --validation=ignore is the behaviour this build already relies on, and ubuntu-image
 # warns that the default is changing. State it rather than inheriting a default that
 # will flip to enforce — locally built, unsigned snaps have no validation sets to meet.
+# shellcheck disable=SC2086 # ASSERTION_ARGS is deliberately word-split, or empty
 sudo ubuntu-image snap "$WORK/model.assert" -O "$OUT" \
   --validation=ignore \
+  $ASSERTION_ARGS \
   --snap "$GADGET_SNAP" \
   --snap "$CLIENT_SNAP"
 sudo chown -R "$(id -u):$(id -g)" "$OUT"
