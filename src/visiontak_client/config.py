@@ -231,8 +231,14 @@ def persist(
     environ = dict(os.environ if environ is None else environ)
 
     if environ.get("SNAP_INSTANCE_NAME") or environ.get("SNAP_NAME"):
-        subprocess.run(["snapctl", "set", f"{key}={value}"], check=True, timeout=30)
-        return
+        try:
+            subprocess.run(["snapctl", "set", f"{key}={value}"], check=True, timeout=30)
+            return
+        except (subprocess.SubprocessError, OSError) as exc:
+            # snapctl set is not always available outside a hook. Falling back to the
+            # file keeps the setting for this boot rather than losing it silently; the
+            # next `snap set` regenerates config.json and takes over again.
+            log.warning("snapctl set %s failed (%s); writing config.json instead", key, exc)
 
     base = Path(environ.get("VISIONTAK_DATA_DIR") or ".")
     path = (data_dir or base) / CONFIG_BASENAME

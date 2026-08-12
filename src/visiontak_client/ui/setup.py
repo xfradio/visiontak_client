@@ -100,5 +100,11 @@ class SetupScreen(Gtk.Box):
         if error:
             self._entry.set_sensitive(True)
             self.set_status(error, error=True)
-        else:
-            self.set_status("Saved — starting up…")
+        # No else: enrolment continues on a worker thread and reports its own progress
+        # through set_status. Claiming success here is what hid a device that never
+        # reached the server.
+
+    def reset_for_retry(self) -> None:
+        """Let the address be corrected after a failed attempt."""
+        self._entry.set_sensitive(True)
+        self._entry.grab_focus()

@@ -91,6 +91,6 @@ def _load_css() -> None:
     )
 
 
-def idle(callback, *args) -> None:
+def idle(callback, *args, **kwargs) -> None:
     """Marshal a call from a worker thread onto the GTK main loop."""
-    GLib.idle_add(lambda: (callback(*args), GLib.SOURCE_REMOVE)[1])
+    GLib.idle_add(lambda: (callback(*args, **kwargs), GLib.SOURCE_REMOVE)[1])

@@ -6,6 +6,7 @@ worker threads so a slow or dead server can never stall the compositor's client.
 
 from __future__ import annotations
 
+import dataclasses
 import logging
 import threading
 
@@ -41,6 +42,7 @@ class KioskController:
 
     def attach(self, window) -> None:  # noqa: ANN001 - KioskWindow, avoids import cycle
         self._window = window
+        window.on_configured = self._configure_from_setup
         self._apply(self._cache.load(self._client.base_url), from_cache=True)
         self._start_cec()
         self._start_registration()
@@ -48,6 +50,45 @@ class KioskController:
         self._apply_rotation()
 
     # -- enrolment ---------------------------------------------------------
+
+    def _configure_from_setup(self, url: str) -> None:
+        """Apply an address typed on the setup screen and enrol with it now.
+
+        On a worker thread: registration is a network call, and blocking the GTK loop
+        would freeze the very screen that is meant to report progress.
+        """
+        self._config = dataclasses.replace(self._config, server_url=url)
+        self._client = VisionTakClient(self._config)
+        idle(self._window.setup_status, "Registering with the server…")
+        threading.Thread(
+            target=self._register_from_setup, name="setup-register", daemon=True
+        ).start()
+
+    def _register_from_setup(self) -> None:
+        result, config = attempt_registration(self._config)
+        self._config = config
+
+        if result is None:
+            # The address saved, but nothing answered. Stay on setup so the address
+            # can be corrected rather than leaving a blank screen behind.
+            idle(
+                self._window.setup_status,
+                f"Saved, but {self._config.server_url} did not answer",
+                error=True,
+            )
+            return
+
+        if result.approved and config.api_token:
+            self._client = VisionTakClient(config)
+            idle(self._window.setup_status, "Approved — starting up")
+            idle(self._window.leave_setup)
+            self._schedule_refresh(0.5)
+            return
+
+        idle(self._window.setup_status, "Registered — waiting for approval")
+        idle(self._window.leave_setup)
+        idle(self._window.set_enrolment_status, "Waiting for approval on the server")
+        self._start_registration()
 
     def _start_registration(self) -> None:
         """Enrol, and keep asking while the server says pending.

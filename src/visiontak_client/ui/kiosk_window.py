@@ -56,6 +56,9 @@ class KioskWindow(Gtk.ApplicationWindow):
 
         # A display with no server address configured cannot do anything useful, and
         # there is no other way to tell it one without a console. Ask on screen.
+        # Set by the controller in attach(); the window has no business doing network
+        # work itself, but it is where the address is typed.
+        self.on_configured = None
         self._setup = SetupScreen(self._on_setup_submit)
         self._stack.add_named(self._setup, "__setup__")
         self._needs_setup = not config.server_url
@@ -108,8 +111,27 @@ class KioskWindow(Gtk.ApplicationWindow):
         """True while the setup field owns the keyboard, so key actions stand down."""
         return self._needs_setup
 
+    def setup_status(self, message: str, *, error: bool = False) -> None:
+        """Report progress on the setup screen, from any thread via idle()."""
+        self._setup.set_status(message, error=error)
+        if error:
+            self._setup.reset_for_retry()
+
+    def leave_setup(self) -> None:
+        """Hand the screen back to the kiosk once an address is accepted."""
+        if not self._needs_setup:
+            return
+        self._needs_setup = False
+        self._stack.set_visible_child(self._placeholder)
+
     def _on_setup_submit(self, url: str) -> str | None:
-        """Persist the address. Returns an error to show, or None on success."""
+        """Persist the address and enrol with it. Returns an error to show, or None.
+
+        Registration happens here rather than being left to a daemon restart. The
+        earlier version only wrote the setting and trusted the configure hook to
+        restart us; when that did not happen the screen still said "Saved" and the
+        device never appeared on the server, with nothing on screen to say so.
+        """
         from ..config import persist
 
         try:
@@ -118,8 +140,12 @@ class KioskWindow(Gtk.ApplicationWindow):
             log.error("could not save server-url: %s", exc)
             return f"Could not save: {exc}"
         log.info("server-url set to %s from the setup screen", url)
-        # Under a snap the configure hook validates this and restarts the daemon, so
-        # the kiosk comes back already configured. Elsewhere it applies on next start.
+
+        if self.on_configured is None:
+            # No controller attached (unit tests, --check-config). The setting is
+            # saved; the next start will use it.
+            return None
+        self.on_configured(url)
         return None
 
     def set_dashboards(self, dashboards: list[Dashboard], *, keep_current: bool = True) -> None:
