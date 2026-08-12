@@ -99,19 +99,19 @@ Check `lsblk` first — `dd` to the wrong device takes your disk with it.
 
 ## First boot
 
-The image is `grade: dangerous`, so it still runs `console-conf` unless you add a
-system-user assertion. To skip the console entirely, ship device settings as gadget
-`defaults` (see [`ubuntu-core-image.md`](ubuntu-core-image.md)) and add a system-user
-assertion signed with the same key.
+`console-conf` is disabled through gadget `defaults`, so the device boots straight to
+the kiosk. If no server address is configured it discovers one from DHCP option 225,
+and failing that asks on screen.
 
-Confirm CEC came through:
+The image also carries a signed system-user assertion, so there is a way in when
+something needs looking at:
 
 ```sh
-snap connections visiontak-client | grep hdmi-cec     # slot should be pi:hdmi-cec
-ls /dev/cec*
+ssh -i /var/lib/visiontak-vm/ssh_key visiontak@<device>
 ```
 
-If the slot is there, `cec-backend=auto` works and the TV remote drives the kiosk.
+Key-only — no password exists. Swap `image/authorized-keys.pub` for your own key to
+change who can get in.
 
 ## Building it locally
 
