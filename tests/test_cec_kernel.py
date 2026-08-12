@@ -73,3 +73,25 @@ def test_hdmi_unplug_clears_the_logical_address(backend):
 
 def test_osd_name_is_truncated_to_the_cec_limit():
     assert KernelCecBackend("/dev/null", "VisionTAK Operations")._osd_name == b"VisionTAK Oper"
+
+
+def test_announce_tells_the_tv_our_osd_name(backend, monkeypatch):
+    """The TV's source list should read VisionTAK without having to ask for it."""
+    sent = []
+    monkeypatch.setattr(
+        backend,
+        "_transmit",
+        lambda dst, op, operands=b"": sent.append((dst, op, operands)),
+    )
+    backend.announce()
+    assert (u.CEC_LOG_ADDR_TV, u.CEC_MSG_SET_OSD_NAME, b"VisionTAK") in sent
+
+
+def test_no_osd_name_is_not_transmitted(monkeypatch):
+    backend = KernelCecBackend("/dev/null", "")
+    backend._phys_addr = 0x1000
+    backend._log_addr = 4
+    sent = []
+    monkeypatch.setattr(backend, "_transmit", lambda dst, op, operands=b"": sent.append(op))
+    backend.send_osd_name()
+    assert u.CEC_MSG_SET_OSD_NAME not in sent
