@@ -24,7 +24,10 @@ snap to `confinement: classic` — which would discard every guarantee we picked
 Core for — the gadget declares a `custom-device` slot. Access then becomes a property
 of the signed image, visible in `snap connections`, revocable with `snap disconnect`.
 
-Clone the Pi gadget, add to `gadget.yaml`:
+Clone the Pi gadget and add the slot to its **`snapcraft.yaml`**, alongside the GPIO
+and I2C slots it already declares. Snap slots live in `snapcraft.yaml`, which becomes
+`meta/snap.yaml`; `gadget.yaml` accepts a `slots:` block, ignores it, and leaves you
+with `snap "pi" has no slot named "hdmi-cec"` on the device:
 
 ```yaml
 slots:

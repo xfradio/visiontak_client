@@ -96,6 +96,37 @@ if [ -n "$ORGANIZE" ]; then
   mv "$WORK/snapcraft.yaml.new" "$WORK/pi-gadget/snapcraft.yaml"
 fi
 
+# /dev/cec0 is covered by no built-in interface. A custom-device slot keeps CEC an
+# auditable property of the image, visible in `snap connections` and revocable with
+# `snap disconnect`, rather than a reason to drop the client to classic confinement.
+#
+# Declared here rather than in gadget.yaml: snap slots live in snapcraft.yaml, which
+# becomes meta/snap.yaml. gadget.yaml accepts a slots block and ignores it.
+if ! grep -q '^  hdmi-cec:' "$WORK/pi-gadget/snapcraft.yaml"; then
+  awk '
+    /^slots:/ && !ins {
+      print
+      print "  hdmi-cec:"
+      print "    interface: custom-device"
+      print "    custom-device: hdmi-cec"
+      print "    devices:"
+      print "      - /dev/cec[0-9]"
+      print "    read-devices:"
+      print "      - /sys/devices/platform/soc/*.hdmi/cec*"
+      print "    udev-tagging:"
+      print "      - kernel: cec[0-9]"
+      print "        subsystem: cec"
+      ins = 1
+      next
+    }
+    { print }
+    END { if (!ins) exit 3 }
+  ' "$WORK/pi-gadget/snapcraft.yaml" > "$WORK/snapcraft.yaml.slots" \
+    || { echo "no slots: stanza in the gadget snapcraft.yaml to extend" >&2; exit 1; }
+  mv "$WORK/snapcraft.yaml.slots" "$WORK/pi-gadget/snapcraft.yaml"
+  echo "    hdmi-cec slot declared in the gadget"
+fi
+
 # The stock gadget sizes ubuntu-seed for Canonical's own image. This one additionally
 # seeds ubuntu-frame, mesa-2404, gnome-46-2404, gtk-common-themes and the client —
 # about 1.4 GiB against a 1200M partition. mkfs reports only "Disk full" without
@@ -138,29 +169,21 @@ fi
 # /dev/cec0 is covered by no built-in interface. Publishing it as a custom-device slot
 # keeps CEC an auditable property of the signed image instead of dropping the client to
 # classic confinement. Appended only if the gadget does not already declare slots.
-if ! grep -q '^slots:' "$WORK/pi-gadget/gadget.yaml"; then
+# Only `connections` goes in gadget.yaml. The slot itself is declared in the gadget's
+# snapcraft.yaml, alongside its GPIO/I2C/SPI slots — see below. Putting a `slots:`
+# block here parses without complaint and is then ignored, which is how the gadget
+# shipped with no hdmi-cec slot at all ("snap \"pi\" has no slot named \"hdmi-cec\"").
+#
+# snapd will not auto-connect custom-device on its own: it needs a store
+# snap-declaration or this. Without it the plug sits unconnected, /dev/cec0 is
+# unreachable and the client falls back to NullCecBackend.
+#
+# The slot reference is deliberately omitted — snapd reads that as the gadget's own
+# slot of the same name. Naming it fails to parse ("expected (<snap-id>|system):name")
+# and a locally built gadget has no snap-id to give.
+if ! grep -q '^connections:' "$WORK/pi-gadget/gadget.yaml"; then
   cat >> "$WORK/pi-gadget/gadget.yaml" <<'EOF'
 
-slots:
-  hdmi-cec:
-    interface: custom-device
-    custom-device: hdmi-cec
-    devices:
-      - /dev/cec[0-9]
-    read-devices:
-      - /sys/devices/platform/soc/*.hdmi/cec*
-    udev-tagging:
-      - kernel: cec[0-9]
-        subsystem: cec
-
-# Publishing the slot is not enough. snapd will not auto-connect custom-device on its
-# own — it needs either a store snap-declaration or this — so without it the plug sits
-# unconnected, /dev/cec0 is unreachable, the client falls back to NullCecBackend and
-# the remote does nothing. The gadget lists connections to make for seeded snaps at
-# first boot, which is exactly this case.
-# The slot is deliberately omitted: snapd reads that as the gadget's own slot of the
-# same name. Naming it explicitly fails to parse — "expected (<snap-id>|system):name"
-# — and a locally built gadget has no snap-id to give.
 connections:
   - plug: visiontak-client:hdmi-cec
 EOF
