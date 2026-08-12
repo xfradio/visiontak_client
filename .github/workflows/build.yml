@@ -52,10 +52,25 @@ jobs:
             echo "::warning::assets/visiontak-logo.png absent — the snap will ship a text splash"
           fi
 
-      - uses: snapcore/action-build@v1
+      # snapcraft is invoked directly rather than through snapcore/action-build:
+      # that action last saw a commit in July 2024, still targets Node 20, and is the
+      # only remaining source of the deprecation warning. Calling snapcraft ourselves
+      # removes the dependency instead of waiting on an unmaintained upstream — and
+      # keeps a stale third-party action out of the path that builds a signed image.
+      #
+      # Destructive mode is right for an ephemeral runner: the runner *is* the
+      # disposable build host, and it skips launching an LXD container to hold a copy
+      # of the same 24.04 userland. The runner is ubuntu-24.04, which is the core24
+      # base, so the build links against the correct libraries.
+      - name: Build the snap
         id: build
-        with:
-          snapcraft-args: pack --build-for=${{ matrix.platform }}
+        run: |
+          sudo snap install snapcraft --classic
+          sudo apt-get install -y -qq squashfs-tools
+          sudo snapcraft pack --destructive-mode --build-for=${{ matrix.platform }}
+          snap_file=$(ls -1 visiontak-client_*_${{ matrix.platform }}.snap | head -1)
+          test -n "$snap_file" || { echo "::error::no ${{ matrix.platform }} snap produced"; exit 1; }
+          echo "snap=$snap_file" >> "$GITHUB_OUTPUT"
 
       # The build can succeed while shipping no artwork, which is only visible on a
       # display. Assert it landed rather than finding out on the Pi.
