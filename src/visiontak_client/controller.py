@@ -14,6 +14,7 @@ from .api import ApiError, AuthError, ClientConfig, ConfigCache, VisionTakClient
 from .cec import CecEvent, CecEventKind, CecReader, create_backend
 from .cec.keymap import action_for
 from .config import Config
+from .firstrun import POLL_SECONDS, attempt_registration
 from .ui.app import idle
 
 log = logging.getLogger(__name__)
@@ -30,6 +31,7 @@ class KioskController:
         self._window = None
         self._reader: CecReader | None = None
         self._refresh_timer: threading.Timer | None = None
+        self._registration_timer: threading.Timer | None = None
         self._rotate_source = 0
         self._rotating = bool(config.rotate_interval)
         self._server_default: str | None = None
@@ -41,13 +43,57 @@ class KioskController:
         self._window = window
         self._apply(self._cache.load(self._client.base_url), from_cache=True)
         self._start_cec()
+        self._start_registration()
         self._schedule_refresh(FIRST_REFRESH_DELAY_SECONDS)
         self._apply_rotation()
+
+    # -- enrolment ---------------------------------------------------------
+
+    def _start_registration(self) -> None:
+        """Enrol, and keep asking while the server says pending.
+
+        A new device stays pending until an admin approves it, which can be days and
+        several reboots away. Polling in the background means the display picks the
+        token up on its own the moment that happens, rather than needing a power cycle
+        timed to the approval.
+        """
+        if not self._config.server_url or self._config.api_token:
+            return
+        self._registration_timer = threading.Timer(0.5, self._poll_registration)
+        self._registration_timer.name = "registration"
+        self._registration_timer.daemon = True
+        self._registration_timer.start()
+
+    def _poll_registration(self) -> None:
+        if self._stopped.is_set():
+            return
+        result, config = attempt_registration(self._config)
+        self._config = config
+
+        if result is not None and result.approved and config.api_token:
+            log.info("approved — reloading with the issued token")
+            self._client = VisionTakClient(config)
+            idle(self._window.set_enrolment_status, "")
+            self._schedule_refresh(0.5)
+            return
+
+        if result is not None and result.pending:
+            idle(self._window.set_enrolment_status, "Waiting for approval on the server")
+        elif result is not None and result.approved:
+            # Approved with no token, and we have none: an admin has to re-issue.
+            idle(self._window.set_enrolment_status, "Approved, but no token was issued")
+
+        self._registration_timer = threading.Timer(POLL_SECONDS, self._poll_registration)
+        self._registration_timer.name = "registration"
+        self._registration_timer.daemon = True
+        self._registration_timer.start()
 
     def stop(self) -> None:
         self._stopped.set()
         if self._refresh_timer is not None:
             self._refresh_timer.cancel()
+        if self._registration_timer is not None:
+            self._registration_timer.cancel()
         if self._reader is not None:
             self._reader.stop()
         self._cancel_rotation()

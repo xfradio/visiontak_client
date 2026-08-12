@@ -7,12 +7,14 @@ so a developer can run the kiosk on a desktop without snapd.
 
 from __future__ import annotations
 
+import dataclasses
 import json
 import logging
 import os
 import re
 import socket
 import subprocess
+import uuid
 from dataclasses import dataclass, fields
 from pathlib import Path
 from typing import Any
@@ -122,6 +124,35 @@ def _total_memory_mib() -> int | None:
     except (OSError, ValueError, IndexError):
         return None
     return None
+
+
+# Hostnames that identify nothing. Ubuntu Core leaves every unit as "localhost", so
+# the old hostname fallback would have enrolled an entire fleet as one device.
+_WEAK_DEVICE_IDS = {"localhost", "localhost.localdomain", "ubuntu", "raspberrypi", ""}
+
+# The register endpoint requires 8-128 characters.
+DEVICE_ID_MIN_LEN = 8
+
+
+def ensure_device_id(config: Config) -> Config:
+    """Give this device a stable, unique id, persisting it the first time.
+
+    Registration identifies a device by this value on every call, so it has to be
+    unique across the fleet and survive reboots. A UUID satisfies both; the hostname
+    satisfies neither on Ubuntu Core.
+    """
+    current = config.device_id.strip()
+    if current.lower() not in _WEAK_DEVICE_IDS and len(current) >= DEVICE_ID_MIN_LEN:
+        return config
+
+    new_id = str(uuid.uuid4())
+    try:
+        persist("device-id", new_id)
+    except Exception as exc:  # noqa: BLE001 - a headless device must still start
+        log.warning("could not persist device-id %s: %s", new_id, exc)
+    else:
+        log.info("assigned this device the id %s", new_id)
+    return dataclasses.replace(config, device_id=new_id)
 
 
 def normalise_server_url(raw: str) -> str:

@@ -89,10 +89,39 @@ snap connections visiontak-client | grep network-setup-observe
 
 ## Registration
 
-`POST /api/v1/client/register`, sending `deviceId` and `name`. A token is taken from
+`POST /api/v1/client/register` (unauthenticated — the one endpoint a device without a
+token may call), sending `deviceId`, `deviceType: raspberry_pi` and `label`.
 whichever of `token`, `apiToken`, `api_token`, `accessToken` or `access_token` the
 response carries, because the contract is not documented server-side yet and a first
 boot on a headless device is a bad place to discover a naming difference.
 
 A server that enrols without issuing a token is treated as success — some deployments
 authorise by device-id alone.
+
+### Approval is a human step
+
+The server answers one of three ways:
+
+| Response | Meaning |
+|---|---|
+| `{"status":"pending"}` | An admin has not approved this device yet |
+| `{"status":"approved","token":"…"}` | The one and only delivery of that token |
+| `{"status":"approved","token":null}` | Approved, but the token was handed out already |
+
+So enrolment is a **poll, not a call**. The client re-registers every 20s while
+pending and picks the token up on its own the moment an admin approves — no power
+cycle timed to the approval. The screen says *"Waiting for approval on the server"*
+meanwhile, rather than an unexplained "Waiting for dashboards…".
+
+The third case is the one that bites: if this device does not already hold the token,
+nobody can retrieve it — an admin has to re-issue the registration. The client logs
+that explicitly instead of looping silently.
+
+### deviceId
+
+Client-generated, persisted, and reused on every call — that reuse is what lets the
+server recognise the same device asking again. The client stores a UUID via
+`snap set device-id`.
+
+It deliberately does **not** use the hostname: Ubuntu Core leaves every unit as
+`localhost`, so a whole fleet would have enrolled as one device.

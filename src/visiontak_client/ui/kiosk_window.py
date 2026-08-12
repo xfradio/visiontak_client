@@ -51,7 +51,7 @@ class KioskWindow(Gtk.ApplicationWindow):
 
         self._stack = Gtk.Stack(transition_type=Gtk.StackTransitionType.CROSSFADE)
         self._stack.set_transition_duration(180)
-        self._placeholder = _build_splash("Waiting for dashboards…")
+        self._placeholder, self._placeholder_label = _build_splash("Waiting for dashboards…")
         self._stack.add_named(self._placeholder, "__placeholder__")
 
         # A display with no server address configured cannot do anything useful, and
@@ -66,7 +66,7 @@ class KioskWindow(Gtk.ApplicationWindow):
         self._blank = _build_blank()
         # Covers the webview until its first paint, so a slow board shows the brand
         # rather than a white flash or a half-drawn dashboard.
-        self._loading = _build_splash("Connecting…")
+        self._loading, _ = _build_splash("Connecting…")
         self._loading.set_visible(False)
         self._loading_ids: set[str] = set()
 
@@ -92,6 +92,16 @@ class KioskWindow(Gtk.ApplicationWindow):
         if 0 <= self._current < len(self._dashboards):
             return self._dashboards[self._current]
         return None
+
+    def set_enrolment_status(self, message: str) -> None:
+        """Replace the placeholder's caption while awaiting approval.
+
+        Distinct from set_status, which reports CEC state into the diagnostics panel.
+
+        A device sitting unapproved otherwise shows 'Waiting for dashboards…' forever,
+        which sends whoever installed it looking for a fault that is not there.
+        """
+        self._placeholder_label.set_label(message or "Waiting for dashboards…")
 
     @property
     def setup_active(self) -> bool:
@@ -400,7 +410,7 @@ def _host_of(uri: str) -> str:
     return urlparse(uri).hostname or uri
 
 
-def _build_splash(message: str) -> Gtk.Widget:
+def _build_splash(message: str) -> tuple[Gtk.Widget, Gtk.Label]:
     """Logo over a black field. Used for both 'no dashboards yet' and 'connecting'."""
     box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=28)
     box.set_halign(Gtk.Align.CENTER)
@@ -419,7 +429,9 @@ def _build_splash(message: str) -> Gtk.Widget:
     label.add_css_class("vt-placeholder")
     label.set_justify(Gtk.Justification.CENTER)
     box.append(label)
-    return box
+    # The caption is returned too, so callers can update it in place — an unapproved
+    # device needs to say why it is waiting.
+    return box, label
 
 
 def _build_toast() -> Gtk.Label:
