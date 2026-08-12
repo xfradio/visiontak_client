@@ -133,6 +133,11 @@ _WEAK_DEVICE_IDS = {"localhost", "localhost.localdomain", "ubuntu", "raspberrypi
 # The register endpoint requires 8-128 characters.
 DEVICE_ID_MIN_LEN = 8
 
+# Prefixed so a device is identifiable as one of ours in the server's device list and
+# in logs, rather than a bare UUID among whatever else registers. 17 + 36 = 53
+# characters, comfortably inside the limit.
+DEVICE_ID_PREFIX = "visiontak_client_"
+
 
 def ensure_device_id(config: Config) -> Config:
     """Give this device a stable, unique id, persisting it the first time.
@@ -143,9 +148,12 @@ def ensure_device_id(config: Config) -> Config:
     """
     current = config.device_id.strip()
     if current.lower() not in _WEAK_DEVICE_IDS and len(current) >= DEVICE_ID_MIN_LEN:
+        # Kept as-is even without the prefix. Changing the id of a device that has
+        # already registered would orphan its approval and enrol it again as a
+        # stranger, which is worse than an inconsistent name.
         return config
 
-    new_id = str(uuid.uuid4())
+    new_id = f"{DEVICE_ID_PREFIX}{uuid.uuid4()}"
     try:
         persist("device-id", new_id)
     except Exception as exc:  # noqa: BLE001 - a headless device must still start

@@ -4,7 +4,7 @@ from unittest import mock
 import pytest
 
 from visiontak_client.api import REGISTER_PATH, ApiError, VisionTakClient
-from visiontak_client.config import Config, ensure_device_id
+from visiontak_client.config import DEVICE_ID_PREFIX, Config, ensure_device_id
 
 
 def _client(**overrides):
@@ -88,9 +88,16 @@ def test_useless_device_ids_are_replaced(weak, monkeypatch):
         "visiontak_client.config.persist", lambda k, v, **kw: saved.update({k: v})
     )
     result = ensure_device_id(Config(device_id=weak))
-    assert len(result.device_id) >= 8
-    assert result.device_id.lower() not in {"localhost", "ubuntu", "raspberrypi"}
+    assert result.device_id.startswith(DEVICE_ID_PREFIX)
+    assert 8 <= len(result.device_id) <= 128
     assert saved["device-id"] == result.device_id
+
+
+def test_generated_ids_are_unique_per_device(monkeypatch):
+    monkeypatch.setattr("visiontak_client.config.persist", lambda *a, **kw: None)
+    first = ensure_device_id(Config(device_id="")).device_id
+    second = ensure_device_id(Config(device_id="")).device_id
+    assert first != second
 
 
 def test_an_existing_device_id_is_kept(monkeypatch):

@@ -10,8 +10,9 @@ Only when `server-url` is unset:
 
 1. Read DHCP option 225 from the lease.
 2. Save it as `server-url`.
-3. `POST /api/v1/client/register` with `{"deviceId": …, "name": …}`.
-4. Save any token the server issues.
+3. `POST /api/v1/client/register` with `{"deviceId": …, "deviceType": "raspberry_pi",
+   "label": …}`, and keep polling while the answer is `pending`.
+4. Save the token the moment approval delivers one.
 
 Every step is best-effort. Discovery finding nothing, a malformed option, an
 unreachable server or a registration error all fall through to the setup screen — a
@@ -117,7 +118,7 @@ that explicitly instead of looping silently.
 ### deviceId
 
 Client-generated, persisted, and reused on every call — that reuse is what lets the
-server recognise the same device asking again. The client stores a UUID via
+server recognise the same device asking again. The client stores `visiontak_client_<uuid4>` via
 `snap set device-id`.
 
 It deliberately does **not** use the hostname: Ubuntu Core leaves every unit as
