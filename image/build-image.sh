@@ -52,28 +52,47 @@ git clone -q --depth 1 -b "$GADGET_BRANCH" https://github.com/canonical/pi-gadge
 # Ubuntu Core 22+ renders splash/vendor-logo.png from the gadget root. The Pi gadget
 # already enables the splash (`splash` and `vt.handoff=2` are in configs/cmdline.txt),
 # so supplying the file is the whole change.
-if [ -f "$WORK/vendor-logo.png" ]; then
-  mkdir -p "$WORK/pi-gadget/splash"
-  cp "$WORK/vendor-logo.png" "$WORK/pi-gadget/splash/vendor-logo.png"
+# Both customisations ride into the gadget the same way. Dropping files in the cloned
+# tree is not enough: the gadget has a single part with `source: configs`, and
+# snapcraft only auto-includes gadget.yaml — so anything else at the project root is
+# never staged, and the build succeeds while shipping none of it.
+EXTRAS="$WORK/pi-gadget/vt-extras"
+mkdir -p "$EXTRAS"
+ORGANIZE=""
 
-  # Dropping the file in the tree is not enough. The gadget has a single part with
-  # `source: configs`, and snapcraft only auto-includes gadget.yaml — so a splash/
-  # directory at the project root is never staged, and the image silently keeps the
-  # stock Ubuntu logo while the build reports success.
-  awk '
+if [ -f "$WORK/vendor-logo.png" ]; then
+  # Ubuntu Core 22+ renders splash/vendor-logo.png from the gadget root, and the Pi
+  # gadget already enables the splash (`splash` and `vt.handoff=2` are in
+  # configs/cmdline.txt), so supplying the file is the whole change.
+  cp "$WORK/vendor-logo.png" "$EXTRAS/vendor-logo.png"
+  ORGANIZE="$ORGANIZE      vendor-logo.png: splash/vendor-logo.png\n"
+fi
+
+# cloud.conf in the gadget is how UC20+ takes cloud-init config. ubuntu-image's
+# --cloud-init flag is rejected outright on these models:
+#   "cannot support with UC20+ model requested customizations: cloud-init user-data"
+# This is what gets RequestOptions=225 onto the device, without which networkd never
+# asks for the option and DHCP discovery can never work.
+if [ -f "$HERE/cloud-init.yaml" ]; then
+  cp "$HERE/cloud-init.yaml" "$EXTRAS/cloud.conf"
+  ORGANIZE="$ORGANIZE      cloud.conf: cloud.conf\n"
+fi
+
+if [ -n "$ORGANIZE" ]; then
+  {
+    printf '  vt-extras:\n    plugin: dump\n    source: vt-extras\n    organize:\n'
+    printf '%b' "$ORGANIZE"
+    printf '\n'
+  } > "$WORK/extras-part.yaml"
+  awk -v partfile="$WORK/extras-part.yaml" '
     /^slots:/ && !ins {
-      print "  splash:"
-      print "    plugin: dump"
-      print "    source: splash"
-      print "    organize:"
-      print "      vendor-logo.png: splash/vendor-logo.png"
-      print ""
+      while ((getline line < partfile) > 0) print line
       ins = 1
     }
     { print }
     END { if (!ins) exit 3 }
   ' "$WORK/pi-gadget/snapcraft.yaml" > "$WORK/snapcraft.yaml.new" \
-    || { echo "could not find a slots: stanza to insert the splash part before" >&2; exit 1; }
+    || { echo "could not find a slots: stanza to insert the extras part before" >&2; exit 1; }
   mv "$WORK/snapcraft.yaml.new" "$WORK/pi-gadget/snapcraft.yaml"
 fi
 
@@ -146,13 +165,23 @@ echo "    gadget: $GADGET_SNAP"
 # Assert the logo is actually inside the snap. A gadget that builds cleanly without it
 # produces an image that boots to the stock Ubuntu splash — a failure only visible on
 # a television, which is the worst place to discover it.
+rm -rf "$WORK/gadget-check"
+unsquashfs -q -f -d "$WORK/gadget-check" "$GADGET_SNAP" splash cloud.conf >/dev/null 2>&1 || true
+
 if [ -f "$WORK/vendor-logo.png" ]; then
-  rm -rf "$WORK/gadget-check"
-  unsquashfs -q -f -d "$WORK/gadget-check" "$GADGET_SNAP" splash >/dev/null 2>&1 || true
   if [ -f "$WORK/gadget-check/splash/vendor-logo.png" ]; then
     echo "    splash: vendor-logo.png present in the gadget"
   else
     echo "vendor-logo.png did not make it into the gadget snap" >&2
+    exit 1
+  fi
+fi
+
+if [ -f "$HERE/cloud-init.yaml" ]; then
+  if [ -f "$WORK/gadget-check/cloud.conf" ]; then
+    echo "    cloud.conf present in the gadget (RequestOptions=225)"
+  else
+    echo "cloud.conf did not make it into the gadget snap — DHCP discovery cannot work" >&2
     exit 1
   fi
 fi
@@ -180,7 +209,6 @@ echo "==> ubuntu-image"
 # will flip to enforce — locally built, unsigned snaps have no validation sets to meet.
 sudo ubuntu-image snap "$WORK/model.assert" -O "$OUT" \
   --validation=ignore \
-  --cloud-init "$HERE/cloud-init.yaml" \
   --snap "$GADGET_SNAP" \
   --snap "$CLIENT_SNAP"
 sudo chown -R "$(id -u):$(id -g)" "$OUT"
