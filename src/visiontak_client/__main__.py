@@ -67,7 +67,7 @@ def main(argv: list[str] | None = None) -> int:
     # run during `snap set` without side effects.
     if not args.check_config:
         cfg = config_module.ensure_device_id(cfg)
-        if not cfg.server_url:
+        if not cfg.server_url and cfg.dhcp_discovery:
             from .firstrun import discover
 
             cfg = discover(cfg)

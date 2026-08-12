@@ -97,3 +97,10 @@ def test_describe_reports_the_url_it_found(tmp_path):
     result = describe(dirs)
     assert result.url == "http://10.0.0.5:3000"
     assert "10.0.0.5:3000" in result.detail
+
+
+def test_discovery_is_off_by_default():
+    """Nothing has made networkd request option 225 on a Core image, so it stays off."""
+    from visiontak_client.config import Config
+
+    assert Config().dhcp_discovery is False

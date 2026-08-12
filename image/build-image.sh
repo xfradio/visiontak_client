@@ -68,15 +68,14 @@ if [ -f "$WORK/vendor-logo.png" ]; then
   ORGANIZE="$ORGANIZE      vendor-logo.png: splash/vendor-logo.png\n"
 fi
 
-# cloud.conf in the gadget is how UC20+ takes cloud-init config. ubuntu-image's
-# --cloud-init flag is rejected outright on these models:
-#   "cannot support with UC20+ model requested customizations: cloud-init user-data"
-# This is what gets RequestOptions=225 onto the device, without which networkd never
-# asks for the option and DHCP discovery can never work.
-if [ -f "$HERE/cloud-init.yaml" ]; then
-  cp "$HERE/cloud-init.yaml" "$EXTRAS/cloud.conf"
-  ORGANIZE="$ORGANIZE      cloud.conf: cloud.conf\n"
-fi
+# cloud.conf is NOT shipped. It is the documented UC20+ route for cloud-init config
+# and it does reach the device — snapd installs it as
+# /etc/cloud/cloud.cfg.d/80_device_gadget.cfg — but it never executes: Ubuntu Core
+# writes /etc/cloud/cloud-init.disabled when a device seeds without a datasource, so
+# cloud-init is disabled before any module runs. Verified on hardware.
+#
+# image/cloud-init.yaml is kept for whenever this is revisited. Shipping it as-is only
+# adds a file that looks like it does something. See docs/dhcp-discovery.md.
 
 if [ -n "$ORGANIZE" ]; then
   {
@@ -211,14 +210,6 @@ if [ -f "$WORK/vendor-logo.png" ]; then
   fi
 fi
 
-if [ -f "$HERE/cloud-init.yaml" ]; then
-  if [ -f "$WORK/gadget-check/cloud.conf" ]; then
-    echo "    cloud.conf present in the gadget (RequestOptions=225)"
-  else
-    echo "cloud.conf did not make it into the gadget snap — DHCP discovery cannot work" >&2
-    exit 1
-  fi
-fi
 
 echo "==> model"
 STAMP="$(date -u +%Y-%m-%dT%H:%M:%SZ)"

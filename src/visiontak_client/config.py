@@ -55,6 +55,12 @@ class Config:
     # accelerated compositing on it is usually slower and less stable than the
     # software path; "auto" leaves the decision to WebKit.
     hardware_acceleration: str = "auto"
+    # Look for the server in DHCP option 225 before asking on screen. Off because
+    # nothing has been able to make systemd-networkd request the option on an Ubuntu
+    # Core image: netplan cannot express RequestOptions, and gadget cloud.conf is
+    # installed but never executed because Core disables cloud-init when a device
+    # seeds without a datasource. See docs/dhcp-discovery.md.
+    dhcp_discovery: bool = False
 
     def __post_init__(self) -> None:
         if self.refresh_interval and self.refresh_interval < 10:

@@ -65,19 +65,26 @@ class SetupScreen(Gtk.Box):
         hint.add_css_class("vt-setup-hint")
         self.append(hint)
 
-        # Say why automatic discovery did not answer. A field unit has no login, so
-        # this line is the only way to tell "the network offered nothing" from "the
-        # lease was unreadable" from "the option was malformed" without one.
+        self._diagnostic = Gtk.Label(label="")
+        self._diagnostic.add_css_class("vt-setup-hint")
+        self._diagnostic.set_visible(False)
+        self.append(self._diagnostic)
+
+    def show_discovery_detail(self) -> None:
+        """Explain why DHCP discovery did not answer.
+
+        Only worth showing when discovery is switched on: with it off, "not offered on
+        this network" is noise that reads like a fault.
+        """
         from ..discovery import describe
 
         try:
             detail = describe().detail
         except Exception:  # noqa: BLE001 - diagnostics must never block setup
-            detail = ""
+            return
         if detail:
-            diagnostic = Gtk.Label(label=detail)
-            diagnostic.add_css_class("vt-setup-hint")
-            self.append(diagnostic)
+            self._diagnostic.set_label(detail)
+            self._diagnostic.set_visible(True)
 
     def focus_entry(self) -> None:
         self._entry.grab_focus()

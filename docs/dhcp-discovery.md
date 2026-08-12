@@ -167,3 +167,65 @@ A field unit has no console, so the setup screen prints what discovery saw:
 | `unusable value '…'` | The option arrived but is not an address |
 
 Without that line the three are indistinguishable from "it didn't work".
+
+## Status: off by default
+
+`dhcp-discovery` defaults to `false`. The client goes straight to the setup screen and
+asks for the address. To try discovery again:
+
+```sh
+sudo snap set visiontak-client dhcp-discovery=true
+sudo snap connect visiontak-client:network-setup-observe
+```
+
+### Why it is off
+
+Nothing has been found that makes systemd-networkd request option 225 on an Ubuntu
+Core image, and without the request the server's answer is discarded before the client
+can read it.
+
+| Attempt | Outcome |
+|---|---|
+| netplan `dhcp4-overrides` | `RequestOptions` is a systemd-networkd setting; netplan cannot express it |
+| `ubuntu-image --cloud-init` | Rejected: *"cannot support with UC20+ model requested customizations"* |
+| gadget `cloud.conf` | Reaches the device — snapd installs it as `/etc/cloud/cloud.cfg.d/80_device_gadget.cfg` — but never runs |
+
+The last one is the interesting failure. Verified on hardware:
+
+```
+$ cloud-init status --long
+status: disabled
+boot_status_code: disabled-by-marker-file
+detail: Cloud-init disabled by /etc/cloud/cloud-init.disabled
+```
+
+Ubuntu Core writes that marker when a device seeds without a datasource. Gadget
+`cloud.conf` supplies *configuration*, not a *datasource*, so cloud-init disables
+itself before executing a single module — which is why `write_files` never ran and
+`journalctl -u cloud-init` is empty. This is what Canonical mean by describing gadget
+cloud-init as development-only.
+
+The client-side code is complete and tested; only delivery of the networkd drop-in is
+unsolved. Options if this is picked up again:
+
+1. Give cloud-init a NoCloud datasource so Core stops disabling it.
+2. Write the drop-in over SSH per device — fine for a handful, not for a fleet.
+3. Query DHCP from inside the client (DHCPINFORM for option 225), which depends on
+   nothing outside the snap but has to coexist with networkd on port 68.
+
+To confirm the rest of the chain independently of delivery, write the file by hand:
+
+```sh
+sudo tee /etc/systemd/network/05-visiontak-dhcp.network >/dev/null <<'NET'
+[Match]
+Name=e*
+
+[Network]
+DHCP=ipv4
+
+[DHCPv4]
+RequestOptions=225
+NET
+sudo systemctl restart systemd-networkd
+sudo grep -r . /run/systemd/netif/leases/
+```

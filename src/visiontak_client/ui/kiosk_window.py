@@ -84,6 +84,8 @@ class KioskWindow(Gtk.ApplicationWindow):
             log.info("no server-url configured — showing first-run setup")
             self._stack.set_visible_child(self._setup)
             self._setup.focus_entry()
+            if config.dhcp_discovery:
+                self._setup.show_discovery_detail()
 
     # -- dashboards --------------------------------------------------------
 
