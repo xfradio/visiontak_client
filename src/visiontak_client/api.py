@@ -30,6 +30,12 @@ from .models import Dashboard, sort_dashboards
 log = logging.getLogger(__name__)
 
 CLIENT_CONFIG_PATH = "/api/v1/client/config"
+REGISTER_PATH = "/api/v1/client/register"
+
+# Field names a register response might use for the issued credential. The contract is
+# not documented server-side yet, so accept the plausible spellings rather than fail a
+# first boot on a naming difference — the device has no console to debug it from.
+_TOKEN_KEYS = ("token", "apiToken", "api_token", "accessToken", "access_token")
 
 # The server is a Next.js app with a catch-all route: an unknown path returns the SPA
 # shell with HTTP 200 rather than a 404. A JSON parse failure therefore means "wrong
@@ -133,6 +139,29 @@ class VisionTakClient:
 
     def fetch_client_config(self) -> ClientConfig:
         return parse_client_config(self._request("GET", CLIENT_CONFIG_PATH), self.base_url)
+
+    def register(self, *, osd_name: str = "") -> str:
+        """Enrol this device and return the issued token, or '' if none was issued.
+
+        Called once, on a device that has just learned where its server is and has no
+        credential yet. A server that enrols without issuing a token is a valid
+        outcome — some deployments authorise by device-id alone — so an empty string
+        is success, not failure.
+        """
+        payload: dict[str, Any] = {"deviceId": self._config.device_id}
+        if osd_name:
+            payload["name"] = osd_name
+        body = self._request("POST", REGISTER_PATH, payload)
+        if not isinstance(body, dict):
+            log.warning("register returned %s, not an object", type(body).__name__)
+            return ""
+        for key in _TOKEN_KEYS:
+            value = body.get(key)
+            if isinstance(value, str) and value:
+                log.info("registered; server issued a token via %r", key)
+                return value
+        log.info("registered; server issued no token (device-id authorisation)")
+        return ""
 
 
 class ConfigCache:

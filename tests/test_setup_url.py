@@ -37,3 +37,16 @@ def test_persist_keeps_existing_keys(tmp_path):
     persist("server-url", "http://vt.example", data_dir=tmp_path, environ={})
     written = json.loads((tmp_path / CONFIG_BASENAME).read_text())
     assert written == {"cec-backend": "none", "server-url": "http://vt.example"}
+
+
+@pytest.mark.parametrize(
+    "junk",
+    [";;;", "http://;;;", "http:// ", "10.0.0.5:notaport", "10.0.0.5:0", "10.0.0.5:99999"],
+)
+def test_junk_authorities_are_rejected(junk):
+    """A bad DHCP option must fall through to setup, not be saved as the server."""
+    assert normalise_server_url(junk) == ""
+
+
+def test_ipv6_literals_are_accepted():
+    assert normalise_server_url("[2001:db8::1]:3000") == "http://[2001:db8::1]:3000"

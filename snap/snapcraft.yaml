@@ -73,6 +73,9 @@ apps:
       - network-bind
       - browser-support
       - hardware-observe
+      # Reads systemd-networkd's DHCP lease to find the server from option 225.
+      # Observe-only: it grants no ability to change the network configuration.
+      - network-setup-observe
       - hdmi-cec
     environment:
       GDK_BACKEND: wayland

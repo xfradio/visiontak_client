@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import socket
 import subprocess
 from dataclasses import dataclass, fields
@@ -141,7 +142,36 @@ def normalise_server_url(raw: str) -> str:
     rest = rest.rstrip("/")
     if scheme.lower() not in {"http", "https"} or not rest:
         return ""
+    if not _valid_authority(rest.split("/", 1)[0]):
+        return ""
     return f"{scheme.lower()}://{rest}"
+
+
+def _valid_authority(authority: str) -> bool:
+    """Check host[:port] really is one.
+
+    Without this, junk becomes a URL — ";;;" would pass as "http://;;;". That is worse
+    than rejecting it: a bad DHCP option would be persisted as the server address, and
+    a field unit with no login would sit pointing at nonsense forever instead of
+    falling back to the setup screen.
+    """
+    if authority.startswith("["):  # IPv6 literal
+        close = authority.find("]")
+        if close < 2:
+            return False
+        host, port = authority[1:close], authority[close + 1 :]
+        if port and not (port.startswith(":") and _valid_port(port[1:])):
+            return False
+        return bool(re.fullmatch(r"[0-9A-Fa-f:.]+", host))
+
+    host, sep, port = authority.partition(":")
+    if sep and not _valid_port(port):
+        return False
+    return bool(re.fullmatch(r"[A-Za-z0-9]([A-Za-z0-9.\-]*[A-Za-z0-9])?", host))
+
+
+def _valid_port(port: str) -> bool:
+    return port.isdigit() and 0 < int(port) <= 65535
 
 
 def persist(
