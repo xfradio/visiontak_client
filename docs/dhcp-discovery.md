@@ -1,8 +1,8 @@
 # Zero-touch enrolment with DHCP option 225
 
-A display that finds its own server needs no console: plug it into the right VLAN and
-it enrols itself. The on-screen setup prompt remains the fallback for networks that do
-not serve the option.
+**Currently disabled** — `dhcp-discovery` defaults to `false`, because nothing has been
+found that makes systemd-networkd request the option on an Ubuntu Core image. The
+client asks for the address on screen instead. Details under *Status* below.
 
 ## What the client does on first boot
 
@@ -124,28 +124,10 @@ server recognise the same device asking again. The client stores `visiontak_clie
 It deliberately does **not** use the hostname: Ubuntu Core leaves every unit as
 `localhost`, so a whole fleet would have enrolled as one device.
 
-## How the image ships the request
+## The drop-in the device would need
 
-`image/cloud-init.yaml` is staged into the gadget snap as **`cloud.conf`**, which is
-how Ubuntu Core 20 and later take cloud-init configuration. It writes the drop-in and
-restarts networkd on first boot.
-
-`ubuntu-image --cloud-init` does *not* work here despite the flag existing — UC20+
-models reject it outright:
-
-```
-Error preparing image: cannot support with UC20+ model requested customizations:
-cloud-init user-data
-```
-
-Note that `cloud.conf` is staged through the same injected part as the splash, because
-the gadget's single part sources only `configs/` and snapcraft auto-includes nothing
-but `gadget.yaml`. The build verifies both landed inside the built snap rather than
-trusting that copying them into the tree was enough.
-
-Canonical describe gadget cloud-init as development-oriented rather than production.
-For a fleet, fold the same `.network` file into a properly maintained gadget fork
-instead of relying on cloud-init to write it at first boot.
+`image/cloud-init.yaml` holds the configuration that would write it. **It is not
+currently shipped** — see *Status* below for why.
 
 It writes `/etc/systemd/network/05-visiontak-dhcp.network`. `05-` sorts ahead of
 netplan's generated `10-netplan-*.network` and systemd applies the first match, so it
