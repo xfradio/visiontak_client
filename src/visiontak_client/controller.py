@@ -200,7 +200,15 @@ class KioskController:
         )
         self._reader = CecReader(backend, self._on_cec_event)
         self._reader.start()
-        idle(self._window.set_status, type(backend).__name__)
+        # Report *why* CEC is inactive, not just that it is. The fallback carries a
+        # reason ("/dev/cec0 missing" is the usual one, meaning the hdmi-cec interface
+        # is not connected) and dropping it left the panel saying NullCecBackend with
+        # no way to tell a missing device from a missing interface from a wrong
+        # setting — on a unit with no login.
+        detail = getattr(backend, "reason", "") or ""
+        name = type(backend).__name__
+        log.info("CEC backend: %s%s", name, f" ({detail})" if detail else "")
+        idle(self._window.set_status, f"{name} ({detail})" if detail else name)
 
     def _on_cec_event(self, event: CecEvent) -> None:
         """Runs on the CEC reader thread."""

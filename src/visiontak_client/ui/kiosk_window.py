@@ -8,6 +8,7 @@ a status toast and a blanking layer.
 from __future__ import annotations
 
 import logging
+from pathlib import Path
 
 import gi
 
@@ -368,6 +369,12 @@ class KioskWindow(Gtk.ApplicationWindow):
             f"Dashboard   {dashboard.name if dashboard else '—'}"
             + (f"  [{self._current + 1}/{len(self._dashboards)}]" if dashboard else ""),
             f"CEC         {getattr(self, '_cec_status', 'starting')}",
+            # The TV showing "raspberry" instead of this name means either the adapter
+            # was never claimed (see the CEC line above) or the set cached the Pi
+            # firmware's identity from before Linux started.
+            f"OSD name    {self._config.osd_name}",
+            f"CEC device  {self._config.cec_device} "
+            f"({'present' if Path(self._config.cec_device).exists() else 'MISSING'})",
         ]
         self._info.set_label("\n".join(lines))
 
