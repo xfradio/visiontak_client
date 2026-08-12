@@ -21,8 +21,8 @@ before it reaches this code. See docs/dhcp-discovery.md.
 from __future__ import annotations
 
 import logging
-import os
 import re
+from dataclasses import dataclass
 from pathlib import Path
 
 from .config import normalise_server_url
@@ -82,19 +82,30 @@ def _lease_files(dirs: tuple[str, ...]) -> list[Path]:
     return found
 
 
-def discover_server_url(dirs: tuple[str, ...] = LEASE_DIRS) -> str:
-    """The server URL advertised by DHCP, or '' when the network does not say.
+@dataclass(frozen=True)
+class Discovery:
+    """What discovery found, and something a human can read on the screen.
 
-    Never raises: discovery failing is an ordinary state that falls through to the
-    setup screen, not an error worth stopping a display from starting for.
+    The detail matters more than it looks: a field unit has no login, so if discovery
+    comes up empty the only way to tell "no lease readable" from "lease read, no
+    option" from "option present but malformed" is for the device to say so itself.
     """
-    for lease in _lease_files(dirs):
+
+    url: str = ""
+    detail: str = ""
+
+
+def describe(dirs: tuple[str, ...] = LEASE_DIRS) -> Discovery:
+    leases = _lease_files(dirs)
+    if not leases:
+        return Discovery(detail=f"DHCP option {OPTION}: no lease found")
+
+    unreadable = 0
+    for lease in leases:
         try:
             content = lease.read_text(errors="replace")
-        except OSError as exc:
-            # Under confinement this is the expected failure when the snap lacks
-            # network-setup-observe, so say which file rather than just "denied".
-            log.debug("cannot read %s: %s", lease, exc)
+        except OSError:
+            unreadable += 1
             continue
         for line in content.splitlines():
             for pattern in _KEY_PATTERNS:
@@ -103,15 +114,28 @@ def discover_server_url(dirs: tuple[str, ...] = LEASE_DIRS) -> str:
                     continue
                 url = parse_option(match.group(1))
                 if url:
-                    log.info("DHCP option %d advertises %s (from %s)", OPTION, url, lease.name)
-                    return url
-                log.warning(
-                    "DHCP option %d present but unusable: %r", OPTION, match.group(1)
+                    return Discovery(url=url, detail=f"DHCP option {OPTION}: {url}")
+                return Discovery(
+                    detail=f"DHCP option {OPTION}: unusable value {match.group(1)!r}"
                 )
-    log.info("no usable DHCP option %d on any interface", OPTION)
-    return ""
+
+    if unreadable:
+        # Almost always the snap interface, not the network.
+        return Discovery(
+            detail=(
+                f"DHCP option {OPTION}: lease unreadable — is network-setup-observe "
+                "connected?"
+            )
+        )
+    return Discovery(detail=f"DHCP option {OPTION}: not offered on this network")
 
 
-def is_confined() -> bool:
-    """True when running inside a snap, where lease access needs an interface."""
-    return bool(os.environ.get("SNAP_NAME") or os.environ.get("SNAP_INSTANCE_NAME"))
+def discover_server_url(dirs: tuple[str, ...] = LEASE_DIRS) -> str:
+    """The server URL advertised by DHCP, or '' when the network does not say.
+
+    Never raises: discovery failing is an ordinary state that falls through to the
+    setup screen, not an error worth stopping a display from starting for.
+    """
+    result = describe(dirs)
+    log.info("%s", result.detail)
+    return result.url

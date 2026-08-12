@@ -180,6 +180,7 @@ echo "==> ubuntu-image"
 # will flip to enforce — locally built, unsigned snaps have no validation sets to meet.
 sudo ubuntu-image snap "$WORK/model.assert" -O "$OUT" \
   --validation=ignore \
+  --cloud-init "$HERE/cloud-init.yaml" \
   --snap "$GADGET_SNAP" \
   --snap "$CLIENT_SNAP"
 sudo chown -R "$(id -u):$(id -g)" "$OUT"

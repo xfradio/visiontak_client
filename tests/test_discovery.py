@@ -63,3 +63,37 @@ def test_unusable_option_falls_through_rather_than_raising(tmp_path):
     """A malformed option must reach the setup screen, not stop the display."""
     dirs = _write_lease(tmp_path, "OPTION_225=;;;\n")
     assert discover_server_url(dirs) == ""
+
+
+def test_describe_reports_no_lease(tmp_path):
+    from visiontak_client.discovery import describe
+
+    assert "no lease" in describe((str(tmp_path / "absent"),)).detail
+
+
+def test_describe_reports_option_absent(tmp_path):
+    from visiontak_client.discovery import describe
+
+    dirs = _write_lease(tmp_path, "ADDRESS=10.0.0.20\n")
+    result = describe(dirs)
+    assert result.url == ""
+    assert "not offered" in result.detail
+
+
+def test_describe_reports_a_malformed_option(tmp_path):
+    """Distinguishing 'unusable' from 'absent' is the whole point on a loginless unit."""
+    from visiontak_client.discovery import describe
+
+    dirs = _write_lease(tmp_path, "OPTION_225=;;;\n")
+    result = describe(dirs)
+    assert result.url == ""
+    assert "unusable" in result.detail
+
+
+def test_describe_reports_the_url_it_found(tmp_path):
+    from visiontak_client.discovery import describe
+
+    dirs = _write_lease(tmp_path, "OPTION_225=10.0.0.5:3000\n")
+    result = describe(dirs)
+    assert result.url == "http://10.0.0.5:3000"
+    assert "10.0.0.5:3000" in result.detail

@@ -1,0 +1,32 @@
+#cloud-config
+#
+# Makes systemd-networkd ask the DHCP server for option 225.
+#
+# This is the piece without which zero-touch enrolment cannot work. networkd only
+# records options it requested: a server sending 225 unsolicited has it discarded
+# before the client can read it, and discovery reports "nothing offered" with no other
+# symptom. netplan cannot express this — `RequestOptions=` exists only in a
+# systemd-networkd .network file, not in netplan's dhcp4-overrides.
+#
+# 05- sorts ahead of netplan's generated 10-netplan-*.network, and systemd applies the
+# first matching file, so this takes over DHCP for wired interfaces. That is the same
+# DHCP netplan was already doing, plus the option request.
+#
+# Wired only. A wifi kiosk still needs netplan for the supplicant, and would need this
+# expressed as a drop-in against the generated file instead.
+write_files:
+  - path: /etc/systemd/network/05-visiontak-dhcp.network
+    permissions: "0644"
+    owner: root:root
+    content: |
+      [Match]
+      Name=e*
+
+      [Network]
+      DHCP=ipv4
+
+      [DHCPv4]
+      RequestOptions=225
+
+runcmd:
+  - [systemctl, restart, systemd-networkd]

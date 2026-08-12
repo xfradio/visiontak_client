@@ -123,3 +123,30 @@ server recognise the same device asking again. The client stores `visiontak_clie
 
 It deliberately does **not** use the hostname: Ubuntu Core leaves every unit as
 `localhost`, so a whole fleet would have enrolled as one device.
+
+## How the image ships the request
+
+`ubuntu-image` takes `--cloud-init`, so `image/cloud-init.yaml` writes the drop-in and
+restarts networkd on first boot. That is the supported way to get a file onto the
+device; netplan genuinely cannot express `RequestOptions`.
+
+It writes `/etc/systemd/network/05-visiontak-dhcp.network`. `05-` sorts ahead of
+netplan's generated `10-netplan-*.network` and systemd applies the first match, so it
+takes over DHCP for wired interfaces — the same DHCP netplan was doing, plus the
+option request.
+
+**Wired only.** A wifi kiosk still needs netplan for the supplicant and would need
+this expressed as a drop-in against the generated file instead.
+
+## Telling the failure modes apart without a login
+
+A field unit has no console, so the setup screen prints what discovery saw:
+
+| On screen | Means |
+|---|---|
+| `not offered on this network` | Lease read fine; the server sent no 225, or networkd was not asking |
+| `lease unreadable — is network-setup-observe connected?` | The snap interface, not the network |
+| `no lease found` | networkd has not leased anything yet |
+| `unusable value '…'` | The option arrived but is not an address |
+
+Without that line the three are indistinguishable from "it didn't work".

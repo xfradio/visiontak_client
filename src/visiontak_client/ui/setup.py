@@ -65,6 +65,20 @@ class SetupScreen(Gtk.Box):
         hint.add_css_class("vt-setup-hint")
         self.append(hint)
 
+        # Say why automatic discovery did not answer. A field unit has no login, so
+        # this line is the only way to tell "the network offered nothing" from "the
+        # lease was unreadable" from "the option was malformed" without one.
+        from ..discovery import describe
+
+        try:
+            detail = describe().detail
+        except Exception:  # noqa: BLE001 - diagnostics must never block setup
+            detail = ""
+        if detail:
+            diagnostic = Gtk.Label(label=detail)
+            diagnostic.add_css_class("vt-setup-hint")
+            self.append(diagnostic)
+
     def focus_entry(self) -> None:
         self._entry.grab_focus()
 
