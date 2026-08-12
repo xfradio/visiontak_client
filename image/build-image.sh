@@ -158,9 +158,11 @@ slots:
 # unconnected, /dev/cec0 is unreachable, the client falls back to NullCecBackend and
 # the remote does nothing. The gadget lists connections to make for seeded snaps at
 # first boot, which is exactly this case.
+# The slot is deliberately omitted: snapd reads that as the gadget's own slot of the
+# same name. Naming it explicitly fails to parse — "expected (<snap-id>|system):name"
+# — and a locally built gadget has no snap-id to give.
 connections:
   - plug: visiontak-client:hdmi-cec
-    slot: hdmi-cec
 EOF
 fi
 
