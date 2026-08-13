@@ -28,21 +28,17 @@ jobs:
       - run: ruff check src tests
 
   snap:
-    name: snap (${{ matrix.platform }})
+    name: snap (arm64)
     needs: test
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          # arm64 must build on an arm64 runner. Cross-building is not possible for
-          # this project: the gnome extension needs mesa-2404 and gnome-46-2404-sdk
-          # as build-snaps matching the *target* arch, and snapd cannot install arm64
-          # snaps into an amd64 container. See docs/arm64-build.md.
-          - platform: arm64
-            runner: ubuntu-24.04-arm
-          - platform: amd64
-            runner: ubuntu-24.04
-    runs-on: ${{ matrix.runner }}
+    # arm64 only: the Pi is the target and nothing else consumes an amd64 build. The
+    # local test VM still needs one, but that is `make snap-amd64` on a workstation
+    # rather than something CI should spend a runner on every push.
+    #
+    # It must build on an arm64 runner. Cross-building is not possible for this
+    # project: the gnome extension needs mesa-2404 and gnome-46-2404-sdk as
+    # build-snaps matching the *target* arch, and snapd cannot install arm64 snaps
+    # into an amd64 container. See docs/arm64-build.md.
+    runs-on: ubuntu-24.04-arm
     steps:
       - uses: actions/checkout@v7
 
@@ -61,15 +57,15 @@ jobs:
       # Destructive mode is right for an ephemeral runner: the runner *is* the
       # disposable build host, and it skips launching an LXD container to hold a copy
       # of the same 24.04 userland. The runner is ubuntu-24.04, which is the core24
-      # base, so the build links against the correct libraries.
+      # base for arm64 too, so the build links against the correct libraries.
       - name: Build the snap
         id: build
         run: |
           sudo snap install snapcraft --classic
           sudo apt-get install -y -qq squashfs-tools
-          sudo snapcraft pack --destructive-mode --build-for=${{ matrix.platform }}
-          snap_file=$(ls -1 visiontak-client_*_${{ matrix.platform }}.snap | head -1)
-          test -n "$snap_file" || { echo "::error::no ${{ matrix.platform }} snap produced"; exit 1; }
+          sudo snapcraft pack --destructive-mode --build-for=arm64
+          snap_file=$(ls -1 visiontak-client_*_arm64.snap | head -1)
+          test -n "$snap_file" || { echo "::error::no arm64 snap produced"; exit 1; }
           echo "snap=$snap_file" >> "$GITHUB_OUTPUT"
 
       # The build can succeed while shipping no artwork, which is only visible on a
@@ -83,7 +79,7 @@ jobs:
 
       - uses: actions/upload-artifact@v7
         with:
-          name: visiontak-client-${{ matrix.platform }}
+          name: visiontak-client-arm64
           path: ${{ steps.build.outputs.snap }}
           if-no-files-found: error
 
