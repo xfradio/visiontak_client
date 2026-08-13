@@ -138,6 +138,16 @@ if grep -q 'vc4-fkms-v3d' "$WORK/pi-gadget/configs/config.txt"; then
   sed -i 's/vc4-fkms-v3d/vc4-kms-v3d/' "$WORK/pi-gadget/configs/config.txt"
   echo "    display driver switched to full KMS (vc4-kms-v3d) so CEC exists"
 fi
+
+# The gadget fixes CMA at 128 MB for every model. That is right for a Pi 3 B+, where
+# 256 would be a quarter of the board's entire memory, and mean for a Pi 4 driving a
+# large panel with video. Raise it per-build rather than per-model: config.txt filters
+# would need one dtoverlay line per model, and a model nobody listed would then get no
+# display at all — a worse failure than a conservative default.
+CMA_MB="${CMA_MB:-128}"
+sed -i "s/\(dtoverlay=vc4-kms-v3d\),cma-[0-9]*/\1,cma-$CMA_MB/" \
+  "$WORK/pi-gadget/configs/config.txt"
+echo "    CMA set to ${CMA_MB}M (CMA_MB= to change; 256 suits a Pi 4)"
 grep -n 'dtoverlay=vc4' "$WORK/pi-gadget/configs/config.txt" || true
 
 SEED_SIZE="${SEED_SIZE:-2500M}"
