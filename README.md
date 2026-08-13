@@ -75,7 +75,9 @@ All via `snap set visiontak-client <key>=<value>`:
 
 `server-url`, `api-token`, `device-id`, `cec-backend` (`auto`|`kernel`|`libcec`|`none`),
 `cec-device`, `osd-name`, `refresh-interval`, `rotate-interval`, `start-dashboard`,
-`verify-tls`, `allowed-hosts`, `max-live-views`, `hardware-acceleration`.
+`verify-tls`, `allowed-hosts`, `max-live-views`, `hardware-acceleration`,
+`dhcp-discovery`. `allowed-hosts` defaults to `*` because dashboards embed
+third-party content; narrow it per device where the dashboards are known.
 On a Pi 3 B+ set `max-live-views=1` and `hardware-acceleration=never` — see
 [`docs/raspberry-pi-3.md`](docs/raspberry-pi-3.md). Defaults and validation rules are in
 [`.pandaos/specs/S001-visiontak-client.md`](.pandaos/specs/S001-visiontak-client.md).

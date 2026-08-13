@@ -411,17 +411,20 @@ def _build_web_settings(config: Config) -> WebKit.Settings:
         "enable_html5_local_storage": True,
         "hardware_acceleration_policy": _accel_policy(config.hardware_acceleration),
         "user_agent": "VisionTAK-Kiosk (Ubuntu Core; Wayland)",
-        # Kiosk economies. A dashboard is never navigated back to, nothing here
-        # captures a camera, and the page cache exists to make the back button fast —
-        # all of it is memory a 1 GiB board would rather spend on the render tree.
+        # Kiosk economies. A dashboard is never navigated back to and nothing here
+        # captures a camera, so both are memory a 1 GiB board would rather spend on
+        # the render tree.
         "enable_page_cache": False,
         "enable_media_stream": False,
-        "media_playback_requires_user_gesture": True,
         "enable_smooth_scrolling": False,
-        # WebGL on VideoCore IV falls back to a software rasteriser that costs far more
-        # than it returns, so it follows the acceleration setting rather than the
-        # WebKit default.
-        "enable_webgl": config.hardware_acceleration == "always",
+        # Autoplay. There is nobody in front of a wall display to click a video, so
+        # requiring a gesture means embedded media simply never starts — which is what
+        # happened to the YouTube tiles on a live dashboard.
+        "media_playback_requires_user_gesture": False,
+        # On only when we are not forcing the software path. Tying this to "always"
+        # left WebGL off under the default "auto" as well, which silently broke any
+        # dashboard embedding a map or a chart that needs it.
+        "enable_webgl": config.hardware_acceleration != "never",
     }
     # WebKitGTK property sets differ between releases, and passing an unknown one to
     # the constructor is a hard TypeError at startup. The Pi's WebKit is not

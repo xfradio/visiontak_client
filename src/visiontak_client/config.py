@@ -43,9 +43,15 @@ class Config:
     verify_tls: bool = True
     request_timeout: int = 15
     # Extra hosts the webviews may navigate to, beyond server-url and its subdomains.
-    # Comma-separated; the single value "*" allows any host. Needed by dashboards that
-    # embed third-party content, which would otherwise render blank.
-    allowed_hosts: str = ""
+    # Comma-separated; the single value "*" allows any host.
+    #
+    # Open by default. Dashboards are authored on the server and routinely embed
+    # third-party content — YouTube, maps, status pages — and a restrictive default
+    # blocks those silently: the tile is simply blank, which reads as a broken
+    # dashboard rather than a policy decision. Narrow it per device where the
+    # dashboards are known:
+    #   snap set visiontak-client allowed-hosts=grafana.example,status.example
+    allowed_hosts: str = "*"
     # How many dashboards keep a live WebView. Each one is a separate WebKit web
     # process holding its own render tree, so this is the dominant memory cost on a
     # small board: a Pi 3 B+ has 1 GiB shared with the GPU and cannot hold more than
