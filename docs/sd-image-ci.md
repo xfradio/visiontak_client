@@ -81,11 +81,16 @@ arguments.
    `splash/vendor-logo.png`. The Pi gadget already enables the splash (`splash` and
    `vt.handoff=2` are in `configs/cmdline.txt`), so supplying the file is the whole
    change.
-3. Appends the `hdmi-cec` `custom-device` slot to `gadget.yaml`, so CEC is an auditable
-   property of the image rather than a reason to drop confinement.
-4. Builds the gadget, signs the model, and runs `ubuntu-image`.
+3. Adds the `hdmi-cec` `custom-device` slot to the gadget's **`snapcraft.yaml`** — slots
+   live there, not in `gadget.yaml`, which accepts a `slots:` block and ignores it —
+   and the matching `connections:` entry to `gadget.yaml`, which is where that does
+   belong. CEC is then an auditable property of the image rather than a reason to drop
+   confinement.
+4. Signs a system-user assertion for SSH, builds the gadget, signs the model, and runs
+   `ubuntu-image`.
 
-Output lands as the **`visiontak-pi-sdcard-image`** artifact.
+Output lands as the **`visiontak-pi-sdcard-image`** artifact, containing
+`visiontak_client.img.xz`.
 
 ## Burning it
 
@@ -100,8 +105,8 @@ Check `lsblk` first — `dd` to the wrong device takes your disk with it.
 ## First boot
 
 `console-conf` is disabled through gadget `defaults`, so the device boots straight to
-the kiosk. If no server address is configured it discovers one from DHCP option 225,
-and failing that asks on screen.
+the kiosk and asks for the server address on screen. DHCP discovery is off by default —
+see [`dhcp-discovery.md`](dhcp-discovery.md) for why.
 
 The image also carries a signed system-user assertion, so there is a way in when
 something needs looking at:
