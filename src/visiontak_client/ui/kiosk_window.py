@@ -17,6 +17,7 @@ gi.require_version("Gdk", "4.0")  # imported lazily in _black() below
 gi.require_version("WebKit", "6.0")
 from gi.repository import GLib, Gtk, WebKit  # noqa: E402
 
+from .. import __version__  # noqa: E402
 from ..actions import Action, DigitAction  # noqa: E402
 from ..branding import logo_path  # noqa: E402
 from ..config import Config  # noqa: E402
@@ -410,7 +411,6 @@ def _build_web_settings(config: Config) -> WebKit.Settings:
         "enable_html5_database": True,
         "enable_html5_local_storage": True,
         "hardware_acceleration_policy": _accel_policy(config.hardware_acceleration),
-        "user_agent": "VisionTAK-Kiosk (Ubuntu Core; Wayland)",
         # Kiosk economies. A dashboard is never navigated back to and nothing here
         # captures a camera, so both are memory a 1 GiB board would rather spend on
         # the render tree.
@@ -433,7 +433,14 @@ def _build_web_settings(config: Config) -> WebKit.Settings:
     unknown = sorted(set(wanted) - available)
     if unknown:
         log.debug("WebKit build has no such settings, ignoring: %s", ", ".join(unknown))
-    return WebKit.Settings(**{k: v for k, v in wanted.items() if k in available})
+    settings = WebKit.Settings(**{k: v for k, v in wanted.items() if k in available})
+
+    # Append to WebKit's own user agent rather than replacing it. A bare
+    # "VisionTAK-Kiosk" string matches no browser any site has heard of, and video
+    # providers respond by refusing to serve a playable format at all — YouTube says
+    # "your browser can't play this video" before codecs even come into it.
+    settings.set_user_agent_with_application_details("VisionTAK-Kiosk", __version__)
+    return settings
 
 
 def _black():

@@ -87,3 +87,27 @@ Common findings:
   client re-claims its logical address on the next state-change event, no restart needed.
 - **Long HDMI runs / switches** drop CEC first. If the picture is fine but CEC is
   flaky, suspect the cable or an intermediate splitter that does not pass CEC through.
+
+## The display driver decides whether CEC exists at all
+
+The Pi exposes `/dev/cec0` only under **full KMS**. The stock `pi` gadget ships:
+
+```
+dtoverlay=vc4-fkms-v3d,cma-128
+```
+
+`fkms` is *fake* KMS: the firmware owns the display and no Linux CEC adapter is ever
+registered. The symptom is total — `ls /dev/cec*` finds nothing and `dmesg | grep -i
+cec` is silent, so there is nothing for an interface or a slot to connect to. No amount
+of snap plumbing helps.
+
+`image/build-image.sh` rewrites it to `vc4-kms-v3d`. To check on a device:
+
+```sh
+grep dtoverlay=vc4 /run/mnt/ubuntu-seed/config.txt
+ls -l /dev/cec*
+dmesg | grep -i cec
+```
+
+If the overlay says `kms` and `/dev/cec0` still does not appear, the fault is below
+this client — kernel or firmware, not confinement.

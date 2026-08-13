@@ -130,6 +130,16 @@ fi
 # seeds ubuntu-frame, mesa-2404, gnome-46-2404, gtk-common-themes and the client —
 # about 1.4 GiB against a 1200M partition. mkfs reports only "Disk full" without
 # naming the structure, so the cause is not obvious from the failure.
+# The stock gadget boots with fake KMS, where the firmware owns the display and no
+# Linux CEC adapter is ever registered — /dev/cec0 simply does not exist, and dmesg
+# mentions no cec at all. Full KMS is what exposes the vc4 CEC adapter, which is the
+# entire basis of remote control here.
+if grep -q 'vc4-fkms-v3d' "$WORK/pi-gadget/configs/config.txt"; then
+  sed -i 's/vc4-fkms-v3d/vc4-kms-v3d/' "$WORK/pi-gadget/configs/config.txt"
+  echo "    display driver switched to full KMS (vc4-kms-v3d) so CEC exists"
+fi
+grep -n 'dtoverlay=vc4' "$WORK/pi-gadget/configs/config.txt" || true
+
 SEED_SIZE="${SEED_SIZE:-2500M}"
 sed -i "s/^\( *\)size: 1200M/\1size: $SEED_SIZE/" "$WORK/pi-gadget/gadget.yaml"
 echo "    ubuntu-seed sized to $SEED_SIZE"
