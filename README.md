@@ -85,6 +85,9 @@ The `configure` hook validates the result with `--check-config` and **fails the
 
 ## Remote control
 
+The keyboard is captured before the webview, so kiosk keys work while a dashboard is
+showing; unmapped keys still reach the page.
+
 Arrows navigate, OK opens the chooser and confirms, Back closes, 1–9 jump straight to a
 dashboard, Ch±/◀▶ step through them, Green reloads, Yellow pauses the carousel, Blue
 shows diagnostics. Full table in [`docs/cec.md`](docs/cec.md). The same actions are on
