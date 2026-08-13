@@ -214,10 +214,14 @@ class KioskController:
         """Runs on the CEC reader thread."""
         if event.kind is CecEventKind.KEY_PRESS and event.key_code is not None:
             action = action_for(event.key_code)
+            # INFO, not debug. "The remote does nothing" has several causes that look
+            # identical from outside — no adapter, no logical address, the TV sending
+            # nothing, or a code we do not map — and at debug level the logs could not
+            # tell them apart. A remote press is rare enough to be worth a line.
             if action is None:
-                log.debug("unmapped CEC key 0x%02x", event.key_code)
+                log.warning("CEC key 0x%02x received but not mapped", event.key_code)
                 return
-            log.debug("CEC key 0x%02x -> %s", event.key_code, action)
+            log.info("CEC key 0x%02x -> %s", event.key_code, action)
             idle(self._dispatch, action)
         elif event.kind is CecEventKind.STANDBY:
             idle(self._window.set_blanked, True)
