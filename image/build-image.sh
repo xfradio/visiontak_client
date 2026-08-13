@@ -290,7 +290,16 @@ sudo chown -R "$(id -u):$(id -g)" "$OUT"
 echo "==> compress"
 IMG="$(find "$OUT" -maxdepth 1 -name '*.img' | head -1)"
 [ -n "$IMG" ] || { echo "ubuntu-image produced no .img" >&2; exit 1; }
-xz -T0 -9 "$IMG"
+
+# ubuntu-image names the file after the gadget volume, which is "pi" — that describes
+# the board, not what is on the card. Rename before compressing so the artefact says
+# what it is when it is sitting in a downloads folder next to other Pi images.
+IMAGE_NAME="${IMAGE_NAME:-visiontak_client}"
+TARGET="$OUT/$IMAGE_NAME.img"
+[ "$IMG" = "$TARGET" ] || mv "$IMG" "$TARGET"
+
+xz -T0 -9 "$TARGET"
+echo "    $TARGET.xz"
 
 echo
 ls -lh "$OUT"

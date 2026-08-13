@@ -92,7 +92,7 @@ Output lands as the **`visiontak-pi-sdcard-image`** artifact.
 Raspberry Pi Imager (*Use custom*) or:
 
 ```sh
-xzcat visiontak-pi-arm64.img.xz | sudo dd of=/dev/sdX bs=4M status=progress conv=fsync
+xzcat visiontak_client.img.xz | sudo dd of=/dev/sdX bs=4M status=progress conv=fsync
 ```
 
 Check `lsblk` first — `dd` to the wrong device takes your disk with it.
