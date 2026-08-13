@@ -135,9 +135,12 @@ parts:
       # WebKit decodes media through GStreamer, and the gnome platform ships only the
       # base set. Without these an embedded video renders the player and then reports
       # "your browser can't play this video" — libav carries the H.264 decoder YouTube
-      # actually serves.
+      # actually serves, and -good carries VP8/VP9.
+      #
+      # -plugins-bad is deliberately absent. It is the largest of the three and adds
+      # nothing either codec needs; including it doubled the snap, which pushed first
+      # boot past the size ubuntu-data had for it.
       - gstreamer1.0-plugins-good
-      - gstreamer1.0-plugins-bad
       - gstreamer1.0-libav
     # PyGObject comes from the distro packages above rather than pip: the wheel would
     # have to be compiled against the gnome SDK's headers for no benefit.

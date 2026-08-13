@@ -214,10 +214,33 @@ sed -i "s/\(dtoverlay=vc4-f\?kms-v3d\),cma-[0-9]*/\1,cma-$CMA_MB/" \
 echo "    CMA ${CMA_MB}M"
 grep -n 'dtoverlay=vc4\|^\[' "$WORK/pi-gadget/configs/config.txt" || true
 
-SEED_SIZE="${SEED_SIZE:-2500M}"
-sed -i "s/^\( *\)size: 1200M/\1size: $SEED_SIZE/" "$WORK/pi-gadget/gadget.yaml"
-echo "    ubuntu-seed sized to $SEED_SIZE"
-grep -n 'size:' "$WORK/pi-gadget/gadget.yaml"
+# Both partitions are resized by matching the stock literal, so an upstream change to
+# the gadget would silently leave the old geometry in place and produce an image that
+# fails the same way as the last one. Fail the build instead — a wrong size is only
+# discovered on hardware, half an hour later, with nothing on screen to explain it.
+resize_partition() {
+  part="$1"; from="$2"; to="$3"
+  if ! grep -q "^ *size: $from\$" "$WORK/pi-gadget/gadget.yaml"; then
+    echo "gadget.yaml has no '$part' partition at the expected $from —" >&2
+    echo "upstream changed it. Re-check the sizes before shipping this image." >&2
+    grep -n 'name:\|size:' "$WORK/pi-gadget/gadget.yaml" >&2
+    exit 1
+  fi
+  sed -i "s/^\( *\)size: $from\$/\1size: $to/" "$WORK/pi-gadget/gadget.yaml"
+  echo "    $part sized to $to (was $from)"
+}
+
+resize_partition ubuntu-seed 1200M "${SEED_SIZE:-2500M}"
+
+# ubuntu-data is where first boot installs every seeded snap, and the gadget fixes it
+# at 1500M with its own "XXX: make auto-grow to partition" note. The seeded set —
+# kernel, core24, mesa, gnome-46-2404, gtk-common-themes, ubuntu-frame and this client
+# — was already close to that, and adding the GStreamer decoders took the client from
+# 68 MB to 142 MB. Install then stops partway with "Installing Ubuntu Core" still on
+# screen and no error anywhere reachable, because there is no console yet.
+resize_partition ubuntu-data 1500M "${DATA_SIZE:-4G}"
+
+grep -n 'name:\|size:' "$WORK/pi-gadget/gadget.yaml"
 
 # Boot straight into the kiosk. Otherwise first boot stops at console-conf waiting for
 # a keyboard, which is exactly what a wall display does not have — and the client's own

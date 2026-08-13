@@ -102,6 +102,17 @@ xzcat visiontak_client.img.xz | sudo dd of=/dev/sdX bs=4M status=progress conv=f
 
 Check `lsblk` first — `dd` to the wrong device takes your disk with it.
 
+Use a card of **8 GB or more**. The partition table is laid out at build time and does
+not shrink to fit: 2500M of `ubuntu-seed`, 750M of `ubuntu-boot`, 32M of `ubuntu-save`
+and 4G of `ubuntu-data` come to roughly 7.3 GB expanded. The download stays near 1 GB
+because the free space compresses away.
+
+`ubuntu-data` is sized generously on purpose. It holds every snap installed at first
+boot — kernel, core24, mesa, `gnome-46-2404`, `gtk-common-themes`, `ubuntu-frame` and
+the client — and the gadget's stock 1500M left almost no margin. Overrun it and the
+device sits on "Installing Ubuntu Core" indefinitely with nothing on screen to say why.
+Both sizes are overridable: `SEED_SIZE` and `DATA_SIZE`.
+
 ## First boot
 
 `console-conf` is disabled through gadget `defaults`, so the device boots straight to
