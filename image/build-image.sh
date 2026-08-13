@@ -152,6 +152,15 @@ if [ "$DISPLAY_DRIVER" = "kms" ]; then
   grep -q 'plymouth.ignore-serial-consoles' "$CMDLINE" \
     || sed -i 's/$/ plymouth.ignore-serial-consoles/' "$CMDLINE"
 
+  # Full KMS relies on the kernel detecting the panel, where fake KMS inherited the
+  # firmware's setup. A display behind a switch, a long cable, or one that is not
+  # awake when the Pi boots can leave a Pi 4 with no output at all. Forcing hotplug
+  # makes it drive HDMI regardless of what it reads back.
+  if ! grep -q 'hdmi_force_hotplug' "$WORK/pi-gadget/configs/config.txt"; then
+    printf '\n[pi4]\nhdmi_force_hotplug=1\n[all]\n' >> "$WORK/pi-gadget/configs/config.txt"
+    echo "    hdmi_force_hotplug=1 set for pi4"
+  fi
+
   echo "    full KMS (vc4-kms-v3d); vt.handoff dropped so plymouth owns the console"
 else
   echo "    fake KMS retained — /dev/cec0 will not exist and the remote will not work" >&2

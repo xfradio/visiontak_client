@@ -53,3 +53,30 @@ embed-heavy displays on Pi 4s and keep Pi 3 B+ units for dashboards the server r
 
 Four simultaneous video tiles is a lot to ask of a Pi 3 B+ even with the decoders
 present. If they play but stutter, that is the board, not the configuration.
+
+## If a board has no video output
+
+The display driver is the usual cause, and it can be changed on the card without
+rebuilding anything. `ubuntu-seed` is a FAT partition, so it mounts on Windows, macOS
+or Linux when you put the SD card in a reader. Edit `config.txt`:
+
+| Line | Effect |
+|---|---|
+| `dtoverlay=vc4-kms-v3d,cma-128` | Full KMS. `/dev/cec0` exists, so the remote works |
+| `dtoverlay=vc4-fkms-v3d,cma-128` | Fake KMS. Video only — no CEC adapter is registered |
+
+Fake KMS inherits the framebuffer the firmware already set up. Full KMS makes the
+kernel detect the panel itself, which is where a display behind a switch, on a long
+cable, or not powered at boot can end up with no output. `hdmi_force_hotplug=1` is set
+for the Pi 4 to drive HDMI regardless of what it reads back; if a display still shows
+nothing, fake KMS is the fallback and costs only the remote.
+
+The same choice at build time:
+
+```sh
+DISPLAY_DRIVER=fkms image/build-image.sh …
+```
+
+Worth checking before changing anything: on a Pi 4, **HDMI0 is the port nearest the
+USB-C power socket**. Full KMS is stricter than fake KMS about which output it lights
+up, so a cable in HDMI1 is worth moving before blaming the driver.
