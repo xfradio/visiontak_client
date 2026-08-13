@@ -134,10 +134,30 @@ fi
 # Linux CEC adapter is ever registered — /dev/cec0 simply does not exist, and dmesg
 # mentions no cec at all. Full KMS is what exposes the vc4 CEC adapter, which is the
 # entire basis of remote control here.
-if grep -q 'vc4-fkms-v3d' "$WORK/pi-gadget/configs/config.txt"; then
+# kms | fkms. Full KMS is the default because it is the only way /dev/cec0 exists —
+# under fake KMS the firmware owns the display and no CEC adapter is ever registered.
+# DISPLAY_DRIVER=fkms reverts, at the cost of the remote.
+DISPLAY_DRIVER="${DISPLAY_DRIVER:-kms}"
+CMDLINE="$WORK/pi-gadget/configs/cmdline.txt"
+
+if [ "$DISPLAY_DRIVER" = "kms" ]; then
   sed -i 's/vc4-fkms-v3d/vc4-kms-v3d/' "$WORK/pi-gadget/configs/config.txt"
-  echo "    display driver switched to full KMS (vc4-kms-v3d) so CEC exists"
+
+  # vt.handoff=2 defers the console to a firmware framebuffer, which full KMS never
+  # creates — the handoff has no owner and the text console stays on screen instead
+  # of the splash. It belongs with fake KMS, so it moves with it.
+  sed -i 's/ *vt\.handoff=2//' "$CMDLINE"
+
+  # Two console= entries are listed, one of them serial. Without this plymouth can
+  # take the serial console for its output and draw nothing on HDMI.
+  grep -q 'plymouth.ignore-serial-consoles' "$CMDLINE" \
+    || sed -i 's/$/ plymouth.ignore-serial-consoles/' "$CMDLINE"
+
+  echo "    full KMS (vc4-kms-v3d); vt.handoff dropped so plymouth owns the console"
+else
+  echo "    fake KMS retained — /dev/cec0 will not exist and the remote will not work" >&2
 fi
+echo "    cmdline: $(cat "$CMDLINE")"
 
 # The gadget fixes CMA at 128 MB for every model. That is right for a Pi 3 B+, where
 # 256 would be a quarter of the board's entire memory, and mean for a Pi 4 driving a
