@@ -35,9 +35,8 @@ slots:
     interface: custom-device
     custom-device: hdmi-cec
     devices:
-      - /dev/cec[0-9]
-    read-devices:
-      - /sys/devices/platform/soc/*.hdmi/cec*
+      - /dev/cec0
+      - /dev/cec1
     udev-tagging:
       - kernel: cec[0-9]
         subsystem: cec
@@ -154,3 +153,24 @@ slot. Do not ship `--devmode` — it disables confinement entirely.
 | `cannot open /dev/cec0` | `hdmi-cec` interface not connected, or the kernel has no CEC adapter (`ls /dev/cec*`) |
 | `no physical address yet` | TV is off or the EDID has not been read; the client re-claims automatically on hot-plug |
 | Dashboards blank but no error | Navigation blocked by the host allowlist — check `snap logs` for `blocked navigation to` |
+
+### The slot has to validate, or it does not exist
+
+An invalid `custom-device` slot is not rejected at build time. snapcraft packs it,
+`ubuntu-image` accepts it, the device boots — and snapd then refuses to publish the
+slot, leaving the plug unconnected with no visible cause. `snap connections` shows a
+bare `-` and nothing explains it.
+
+```
+$ snap warnings
+warning: snap "pi" has bad plugs or slots: hdmi-cec (custom-device "read-devices"
+  path must start with /dev/ and cannot contain special characters:
+  "/sys/devices/platform/soc/*.hdmi/cec*")
+```
+
+`read-devices` accepts device nodes under `/dev/` only — a sysfs path invalidates the
+whole slot. The client reaches CEC entirely through ioctls on `/dev/cec0`, so it needs
+no sysfs access and the entry is simply gone.
+
+**`snap warnings` is the command that finds this.** Nothing in `snap connections`,
+`snap interfaces` or the journal points at it.
