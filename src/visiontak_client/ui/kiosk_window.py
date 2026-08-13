@@ -22,6 +22,7 @@ from ..actions import Action, DigitAction  # noqa: E402
 from ..branding import logo_path  # noqa: E402
 from ..config import Config  # noqa: E402
 from ..models import Dashboard  # noqa: E402
+from ..netinfo import local_ip  # noqa: E402
 from .menu import DashboardMenu  # noqa: E402
 from .policy import HostAllowlist, make_policy_handler  # noqa: E402
 from .setup import SetupScreen  # noqa: E402
@@ -368,6 +369,9 @@ class KioskWindow(Gtk.ApplicationWindow):
         dashboard = self.current_dashboard
         lines = [
             f"Device      {self._config.device_id}",
+            # The only way to learn where to SSH to. A wall display shows nothing else
+            # about itself, and every Ubuntu Core unit is called "localhost".
+            f"Address     {local_ip(self._config.server_url) or '(no network)'}",
             f"Server      {self._config.server_url or '(unset)'}",
             f"Dashboard   {dashboard.name if dashboard else '—'}"
             + (f"  [{self._current + 1}/{len(self._dashboards)}]" if dashboard else ""),
