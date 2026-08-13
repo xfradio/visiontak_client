@@ -133,6 +133,11 @@ fi
 # Linux CEC adapter is ever registered — /dev/cec0 simply does not exist, and dmesg
 # mentions no cec at all. Full KMS is what exposes the vc4 CEC adapter, which is the
 # entire basis of remote control here.
+# The gadget allocates 128 MB of contiguous memory to the GPU for every model. That
+# suits a Pi 3 B+, where 256 would be a quarter of the board's entire memory, and is
+# modest for a Pi 4 driving a large panel with video.
+CMA_MB="${CMA_MB:-128}"
+
 # kms | fkms. Full KMS is the default because it is the only way /dev/cec0 exists —
 # under fake KMS the firmware owns the display and no CEC adapter is ever registered.
 # DISPLAY_DRIVER=fkms reverts, at the cost of the remote.
@@ -140,7 +145,30 @@ DISPLAY_DRIVER="${DISPLAY_DRIVER:-kms}"
 CMDLINE="$WORK/pi-gadget/configs/cmdline.txt"
 
 if [ "$DISPLAY_DRIVER" = "kms" ]; then
-  sed -i 's/vc4-fkms-v3d/vc4-kms-v3d/' "$WORK/pi-gadget/configs/config.txt"
+  # Per board, because the two boards disagree. Full KMS is the only way /dev/cec0
+  # exists, and a Pi 3 B+ runs it happily. A Pi 4 under full KMS produced no output at
+  # all — not the overlay name, which the firmware's overlay_map already resolves to
+  # the 2711 variant, and not hotplug. Rather than give up the remote on every board or
+  # ship an image that shows nothing on a Pi 4, choose per model.
+  #
+  # PI4_DRIVER=kms once a Pi 4 is known to light up under full KMS.
+  PI4_DRIVER="${PI4_DRIVER:-fkms}"
+  awk -v cma="$CMA_MB" -v pi4="$PI4_DRIVER" '
+    /^dtoverlay=vc4-f?kms-v3d/ {
+      # Every model the gadget supports gets exactly one overlay line. No [all]
+      # fallback: it would load a second overlay on top of the matched one.
+      printf "[pi4]\ndtoverlay=vc4-%s-v3d,cma-%s\n", pi4, cma
+      printf "[cm4]\ndtoverlay=vc4-%s-v3d,cma-%s\n", pi4, cma
+      printf "[pi3]\ndtoverlay=vc4-kms-v3d,cma-%s\n", cma
+      printf "[cm3]\ndtoverlay=vc4-kms-v3d,cma-%s\n", cma
+      printf "[pi2]\ndtoverlay=vc4-fkms-v3d,cma-%s\n", cma
+      printf "[all]\n"
+      next
+    }
+    { print }
+  ' "$WORK/pi-gadget/configs/config.txt" > "$WORK/config.txt.new"
+  mv "$WORK/config.txt.new" "$WORK/pi-gadget/configs/config.txt"
+  echo "    pi4/cm4 -> $PI4_DRIVER, pi3/cm3 -> kms (CEC), pi2 -> fkms"
 
   # vt.handoff=2 defers the console to a firmware framebuffer, which full KMS never
   # creates — the handoff has no owner and the text console stays on screen instead
@@ -167,16 +195,11 @@ else
 fi
 echo "    cmdline: $(cat "$CMDLINE")"
 
-# The gadget fixes CMA at 128 MB for every model. That is right for a Pi 3 B+, where
-# 256 would be a quarter of the board's entire memory, and mean for a Pi 4 driving a
-# large panel with video. Raise it per-build rather than per-model: config.txt filters
-# would need one dtoverlay line per model, and a model nobody listed would then get no
-# display at all — a worse failure than a conservative default.
-CMA_MB="${CMA_MB:-128}"
-sed -i "s/\(dtoverlay=vc4-kms-v3d\),cma-[0-9]*/\1,cma-$CMA_MB/" \
+# fkms leaves a single overlay line the per-model rewrite above never touched.
+sed -i "s/\(dtoverlay=vc4-f\?kms-v3d\),cma-[0-9]*/\1,cma-$CMA_MB/" \
   "$WORK/pi-gadget/configs/config.txt"
-echo "    CMA set to ${CMA_MB}M (CMA_MB= to change; 256 suits a Pi 4)"
-grep -n 'dtoverlay=vc4' "$WORK/pi-gadget/configs/config.txt" || true
+echo "    CMA ${CMA_MB}M"
+grep -n 'dtoverlay=vc4\|^\[' "$WORK/pi-gadget/configs/config.txt" || true
 
 SEED_SIZE="${SEED_SIZE:-2500M}"
 sed -i "s/^\( *\)size: 1200M/\1size: $SEED_SIZE/" "$WORK/pi-gadget/gadget.yaml"
