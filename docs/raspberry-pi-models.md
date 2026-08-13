@@ -80,3 +80,30 @@ DISPLAY_DRIVER=fkms image/build-image.sh …
 Worth checking before changing anything: on a Pi 4, **HDMI0 is the port nearest the
 USB-C power socket**. Full KMS is stricter than fake KMS about which output it lights
 up, so a cable in HDMI1 is worth moving before blaming the driver.
+
+### The Pi 4 needs its HDMI mode stated
+
+A Pi 4 under full KMS showed no picture at all until `config.txt` named the mode:
+
+```
+[pi4]
+hdmi_force_hotplug=1
+hdmi_group=1
+hdmi_mode=16
+[all]
+```
+
+Fake KMS inherited whatever the firmware had already negotiated; full KMS makes the
+kernel do it, and on a Pi 4 that produced nothing. Forcing hotplug alone was not
+enough — the mode had to be stated outright. Group 1 mode 16 is CEA 1080p60, which is
+what a television is.
+
+With that in place the Pi 4 runs full KMS, so it keeps `/dev/cec0` and the remote. A
+panel that wants something other than 1080p60 needs different values:
+
+```sh
+HDMI_GROUP=1 HDMI_MODE=4 image/build-image.sh …   # 720p60
+PI4_DRIVER=fkms image/build-image.sh …            # give up CEC, take any mode
+```
+
+The mode tables are in the Raspberry Pi `config.txt` documentation.

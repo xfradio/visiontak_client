@@ -151,8 +151,10 @@ if [ "$DISPLAY_DRIVER" = "kms" ]; then
   # the 2711 variant, and not hotplug. Rather than give up the remote on every board or
   # ship an image that shows nothing on a Pi 4, choose per model.
   #
-  # PI4_DRIVER=kms once a Pi 4 is known to light up under full KMS.
-  PI4_DRIVER="${PI4_DRIVER:-fkms}"
+  # A Pi 4 does light up under full KMS — it was not the driver, it was the mode. With
+  # hdmi_group/hdmi_mode forced below it shows a picture, so it keeps CEC too.
+  # PI4_DRIVER=fkms falls back to video-only if a particular panel disagrees.
+  PI4_DRIVER="${PI4_DRIVER:-kms}"
   awk -v cma="$CMA_MB" -v pi4="$PI4_DRIVER" '
     /^dtoverlay=vc4-f?kms-v3d/ {
       # Every model the gadget supports gets exactly one overlay line. No [all]
@@ -180,13 +182,24 @@ if [ "$DISPLAY_DRIVER" = "kms" ]; then
   grep -q 'plymouth.ignore-serial-consoles' "$CMDLINE" \
     || sed -i 's/$/ plymouth.ignore-serial-consoles/' "$CMDLINE"
 
-  # Full KMS relies on the kernel detecting the panel, where fake KMS inherited the
-  # firmware's setup. A display behind a switch, a long cable, or one that is not
-  # awake when the Pi boots can leave a Pi 4 with no output at all. Forcing hotplug
-  # makes it drive HDMI regardless of what it reads back.
+  # Full KMS relies on the kernel negotiating a mode, where fake KMS inherited whatever
+  # the firmware had already set up. On a Pi 4 that negotiation produced no picture at
+  # all until the mode was stated outright — hotplug forcing alone was not enough.
+  #
+  # 1/16 is CEA 1080p60, which is what a television is. A panel that wants something
+  # else needs HDMI_GROUP/HDMI_MODE; the table is in the Raspberry Pi config.txt
+  # documentation. This is scoped to pi4 because that is the board that needed it.
+  HDMI_GROUP="${HDMI_GROUP:-1}"
+  HDMI_MODE="${HDMI_MODE:-16}"
   if ! grep -q 'hdmi_force_hotplug' "$WORK/pi-gadget/configs/config.txt"; then
-    printf '\n[pi4]\nhdmi_force_hotplug=1\n[all]\n' >> "$WORK/pi-gadget/configs/config.txt"
-    echo "    hdmi_force_hotplug=1 set for pi4"
+    {
+      printf '\n[pi4]\n'
+      printf 'hdmi_force_hotplug=1\n'
+      printf 'hdmi_group=%s\n' "$HDMI_GROUP"
+      printf 'hdmi_mode=%s\n' "$HDMI_MODE"
+      printf '[all]\n'
+    } >> "$WORK/pi-gadget/configs/config.txt"
+    echo "    pi4 HDMI forced to group=$HDMI_GROUP mode=$HDMI_MODE (1/16 = 1080p60)"
   fi
 
   echo "    full KMS (vc4-kms-v3d); vt.handoff dropped so plymouth owns the console"
