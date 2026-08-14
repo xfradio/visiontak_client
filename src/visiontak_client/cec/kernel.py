@@ -34,6 +34,7 @@ class KernelCecBackend(CecBackend):
         self._wake_r: int | None = None
         self._wake_w: int | None = None
         self._lock = threading.Lock()
+        self._poller: select.poll | None = None
         self._log_addr = u.CEC_LOG_ADDR_UNREGISTERED
         self._phys_addr = u.CEC_PHYS_ADDR_INVALID
 
@@ -45,6 +46,12 @@ class KernelCecBackend(CecBackend):
         except OSError as exc:
             raise CecError(f"cannot open {self._device}: {exc}") from exc
         self._wake_r, self._wake_w = os.pipe()
+        # Registered once rather than per poll(). This is the one loop that runs for
+        # the life of the process, so rebuilding the poll object and re-registering
+        # both descriptors on every pass was pure churn on the device's weakest CPU.
+        self._poller = select.poll()
+        self._poller.register(self._fd, select.POLLIN | select.POLLPRI)
+        self._poller.register(self._wake_r, select.POLLIN)
         caps = self._caps()
         log.info("cec adapter %s: driver=%s name=%s caps=0x%08x",
                  self._device, caps.driver.decode(), caps.name.decode(), caps.capabilities)
@@ -59,6 +66,7 @@ class KernelCecBackend(CecBackend):
             if self._wake_w is not None:
                 os.write(self._wake_w, b"x")
             fd, self._fd = self._fd, None
+            self._poller = None
         if fd is not None:
             os.close(fd)
         for pipe_fd in (self._wake_r, self._wake_w):
@@ -151,12 +159,9 @@ class KernelCecBackend(CecBackend):
     # -- receive -----------------------------------------------------------
 
     def poll(self, timeout: float) -> list[CecEvent]:
-        if self._fd is None:
+        poller = self._poller
+        if self._fd is None or poller is None:
             return []
-        poller = select.poll()
-        poller.register(self._fd, select.POLLIN | select.POLLPRI)
-        if self._wake_r is not None:
-            poller.register(self._wake_r, select.POLLIN)
         try:
             ready = poller.poll(timeout * 1000)
         except OSError as exc:

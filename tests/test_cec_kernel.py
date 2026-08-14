@@ -1,3 +1,5 @@
+import time
+
 import pytest
 
 pytest.importorskip("fcntl", reason="kernel CEC backend is Linux-only")
@@ -95,3 +97,26 @@ def test_no_osd_name_is_not_transmitted(monkeypatch):
     monkeypatch.setattr(backend, "_transmit", lambda dst, op, operands=b"": sent.append(op))
     backend.send_osd_name()
     assert u.CEC_MSG_SET_OSD_NAME not in sent
+
+
+def test_the_null_backend_wakes_on_close():
+    """close() must interrupt a poll, or shutdown waits out the full timeout."""
+    from visiontak_client.cec.base import NullCecBackend
+
+    backend = NullCecBackend()
+    backend.open()
+    backend.close()
+    started = time.monotonic()
+    assert backend.poll(30.0) == []
+    assert time.monotonic() - started < 1.0, "poll ignored the close and slept"
+
+
+def test_the_null_backend_waits_when_running():
+    """It must still block, or the reader thread becomes a busy loop."""
+    from visiontak_client.cec.base import NullCecBackend
+
+    backend = NullCecBackend()
+    backend.open()
+    started = time.monotonic()
+    backend.poll(0.2)
+    assert time.monotonic() - started >= 0.15

@@ -198,18 +198,27 @@ class ConfigCache:
 
     def __init__(self, path: Path) -> None:
         self._path = path
+        self._last_written: str | None = None
 
     def save(self, client_config: ClientConfig) -> None:
-        self._path.parent.mkdir(parents=True, exist_ok=True)
         payload = {
             "defaultDashboardId": client_config.default_dashboard_id,
             "allowedDashboards": [
                 {"id": d.id, "name": d.name, "sortOrder": d.order} for d in client_config.dashboards
             ],
         }
+        blob = json.dumps(payload, indent=2)
+        # The refresh loop calls this on every poll, whether or not the server said
+        # anything new — several hundred rewrites a day of a file that changes when an
+        # admin edits a dashboard. That is write cycles spent on an SD card, which is
+        # the part of a Pi most likely to fail and the one that takes the unit with it.
+        if blob == self._last_written and self._path.is_file():
+            return
+        self._path.parent.mkdir(parents=True, exist_ok=True)
         tmp = self._path.with_suffix(".tmp")
-        tmp.write_text(json.dumps(payload, indent=2))
+        tmp.write_text(blob)
         tmp.replace(self._path)
+        self._last_written = blob
 
     def load(self, base_url: str) -> ClientConfig:
         if not self._path.is_file():

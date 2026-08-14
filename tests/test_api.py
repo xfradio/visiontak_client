@@ -110,3 +110,36 @@ def test_cache_write_is_atomic(tmp_path):
     cache.save(ClientConfig([Dashboard("b", "B", "u")]))
     assert [d["id"] for d in json.loads(path.read_text())["allowedDashboards"]] == ["b"]
     assert not list(tmp_path.glob("*.tmp"))
+
+
+def test_an_unchanged_config_is_not_rewritten(tmp_path):
+    """The refresh loop saves on every poll. Rewriting an identical file hundreds of
+    times a day spends SD card write cycles for nothing."""
+    path = tmp_path / "cc.json"
+    cache = ConfigCache(path)
+    config = ClientConfig(dashboards=[Dashboard(id="a", name="A", url=f"{BASE}/view/a")])
+
+    cache.save(config)
+    first = path.stat().st_mtime_ns
+
+    cache.save(config)
+    assert path.stat().st_mtime_ns == first, "identical config was written again"
+
+
+def test_a_changed_config_is_written(tmp_path):
+    path = tmp_path / "cc.json"
+    cache = ConfigCache(path)
+    cache.save(ClientConfig(dashboards=[Dashboard(id="a", name="A", url=f"{BASE}/view/a")]))
+    cache.save(ClientConfig(dashboards=[Dashboard(id="b", name="B", url=f"{BASE}/view/b")]))
+    assert "b" in json.loads(path.read_text())["allowedDashboards"][0]["id"]
+
+
+def test_a_deleted_cache_file_is_recreated(tmp_path):
+    """Skipping the write must not depend on memory alone — the file is the artefact."""
+    path = tmp_path / "cc.json"
+    cache = ConfigCache(path)
+    config = ClientConfig(dashboards=[Dashboard(id="a", name="A", url=f"{BASE}/view/a")])
+    cache.save(config)
+    path.unlink()
+    cache.save(config)
+    assert path.is_file()

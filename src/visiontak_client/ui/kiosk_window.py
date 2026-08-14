@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
+from time import monotonic
 
 import gi
 
@@ -31,6 +32,7 @@ log = logging.getLogger(__name__)
 
 TOAST_TIMEOUT_SECONDS = 4
 _SPLASH_LOGO_PX = 320
+_IP_CACHE_SECONDS = 30
 
 
 class KioskWindow(Gtk.ApplicationWindow):
@@ -47,6 +49,8 @@ class KioskWindow(Gtk.ApplicationWindow):
         if self._allowlist.allows_any:
             log.warning("allowed-hosts=* — navigation is unrestricted")
         self._toast_source = 0
+        self._ip_cache: tuple[str, float] = ("", 0.0)
+        self._handlers = self._build_handlers()
         self._session = _build_network_session(config)
 
         self.set_decorated(False)
@@ -287,7 +291,13 @@ class KioskWindow(Gtk.ApplicationWindow):
         if isinstance(action, DigitAction):
             self._jump_to_digit(action.digit)
             return
-        handlers = {
+        handler = self._handlers.get(action)
+        if handler is not None:
+            handler()
+
+    def _build_handlers(self) -> dict[Action, object]:
+        """Action table, built once. It was rebuilt — twelve closures — per key press."""
+        return {
             Action.MENU_TOGGLE: lambda: self._menu.toggle(max(self._current, 0)),
             Action.MENU_CLOSE: self._menu.close,
             Action.MENU_UP: lambda: self._menu_step(-1),
@@ -301,9 +311,6 @@ class KioskWindow(Gtk.ApplicationWindow):
             Action.BLANK_ON: lambda: self.set_blanked(True),
             Action.BLANK_OFF: lambda: self.set_blanked(False),
         }
-        handler = handlers.get(action)
-        if handler is not None:
-            handler()
 
     def _menu_step(self, delta: int) -> None:
         """Up/down open the chooser if it is closed, rather than doing nothing."""
@@ -363,6 +370,22 @@ class KioskWindow(Gtk.ApplicationWindow):
         self._cec_status = cec_status
         self._update_info()
 
+    def _address(self) -> str:
+        """This device's IP, cached briefly.
+
+        local_ip() opens a UDP socket with a half-second timeout, and this runs on the
+        GTK main loop. _update_info() fires on every dashboard change, so with the
+        overlay open during a carousel rotation — and no network, which is exactly when
+        somebody is reading this panel — each switch stalled the compositor's client
+        for up to that timeout. An address does not change often enough to be worth it.
+        """
+        now = monotonic()
+        value, taken_at = self._ip_cache
+        if taken_at == 0.0 or now - taken_at > _IP_CACHE_SECONDS:
+            value = local_ip(self._config.server_url)
+            self._ip_cache = (value, now)
+        return value
+
     def _update_info(self) -> None:
         if not self._info.get_visible():
             return
@@ -371,7 +394,7 @@ class KioskWindow(Gtk.ApplicationWindow):
             f"Device      {self._config.device_id}",
             # The only way to learn where to SSH to. A wall display shows nothing else
             # about itself, and every Ubuntu Core unit is called "localhost".
-            f"Address     {local_ip(self._config.server_url) or '(no network)'}",
+            f"Address     {self._address() or '(no network)'}",
             f"Server      {self._config.server_url or '(unset)'}",
             f"Dashboard   {dashboard.name if dashboard else '—'}"
             + (f"  [{self._current + 1}/{len(self._dashboards)}]" if dashboard else ""),
@@ -406,6 +429,22 @@ def _accel_policy(mode: str):
     return getattr(policy, "ON_DEMAND", policy.ALWAYS)
 
 
+_AVAILABLE_SETTINGS: set[str] | None = None
+
+
+def _available_settings() -> set[str]:
+    """Property names this WebKit build accepts, introspected once.
+
+    list_properties() walks the whole GObject class every call, and settings are built
+    per WebView — so this ran again for each dashboard the kiosk opened, to produce an
+    answer that cannot change while the process lives.
+    """
+    global _AVAILABLE_SETTINGS
+    if _AVAILABLE_SETTINGS is None:
+        _AVAILABLE_SETTINGS = {p.name.replace("-", "_") for p in WebKit.Settings.list_properties()}
+    return _AVAILABLE_SETTINGS
+
+
 def _build_web_settings(config: Config) -> WebKit.Settings:
     wanted = {
         "enable_developer_extras": False,
@@ -433,7 +472,7 @@ def _build_web_settings(config: Config) -> WebKit.Settings:
     # WebKitGTK property sets differ between releases, and passing an unknown one to
     # the constructor is a hard TypeError at startup. The Pi's WebKit is not
     # necessarily the one this was written against, so filter to what exists.
-    available = {p.name.replace("-", "_") for p in WebKit.Settings.list_properties()}
+    available = _available_settings()
     unknown = sorted(set(wanted) - available)
     if unknown:
         log.debug("WebKit build has no such settings, ignoring: %s", ", ".join(unknown))

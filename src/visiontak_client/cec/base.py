@@ -7,6 +7,7 @@ USB adapter are interchangeable.
 from __future__ import annotations
 
 import abc
+import threading
 from dataclasses import dataclass
 from enum import StrEnum
 
@@ -67,20 +68,22 @@ class NullCecBackend(CecBackend):
 
     def __init__(self, reason: str = "cec disabled") -> None:
         self.reason = reason
-        self._stop = False
+        self._stop = threading.Event()
 
     def open(self) -> None:
-        self._stop = False
+        self._stop.clear()
 
     def poll(self, timeout: float) -> list[CecEvent]:
-        import time
-
-        if not self._stop:
-            time.sleep(min(timeout, 1.0))
+        # An Event rather than time.sleep, for two reasons. It honours the caller's
+        # timeout instead of capping at one second, so a device with no CEC at all —
+        # the common case on a stock gadget — stops waking the CPU once a second for
+        # the life of the unit. And close() interrupts it, so shutdown no longer waits
+        # out the remainder of a sleep it cannot cancel.
+        self._stop.wait(timeout)
         return []
 
     def announce(self) -> None:
         return None
 
     def close(self) -> None:
-        self._stop = True
+        self._stop.set()

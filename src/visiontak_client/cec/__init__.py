@@ -24,6 +24,12 @@ __all__ = [
 
 RECONNECT_DELAY_SECONDS = 5.0
 
+# How long a single poll() may block. This is a ceiling, not a heartbeat: the kernel
+# backend returns the moment a CEC message arrives, and close() writes to its wake pipe
+# so shutdown does not wait this out. It was 0.5s, which woke the CPU twice a second
+# for the life of an appliance that is idle almost all of the time.
+POLL_TIMEOUT_SECONDS = 5.0
+
 
 def create_backend(backend: str, device: str, osd_name: str) -> CecBackend:
     """Build a backend by name. `auto` prefers the kernel adapter, then libcec."""
@@ -90,7 +96,7 @@ class CecReader:
     def _pump(self) -> None:
         while not self._stop.is_set():
             try:
-                events = self._backend.poll(0.5)
+                events = self._backend.poll(POLL_TIMEOUT_SECONDS)
             except OSError as exc:
                 log.warning("cec read failed (%s); reopening adapter", exc)
                 self._safe_close()
