@@ -65,3 +65,24 @@ def test_dashboards_extend_the_allowlist():
 
 def test_empty_allowlist_permits_nothing_remote():
     assert not HostAllowlist([]).permits("https://vt.example")
+
+
+def test_navigation_is_open_by_default():
+    """Dashboards embed third-party content; a closed default blanks tiles silently."""
+    from visiontak_client.config import Config
+    from visiontak_client.ui.policy import HostAllowlist
+
+    seed = [h.strip() for h in Config().allowed_hosts.split(",") if h.strip()]
+    assert HostAllowlist(seed).allows_any
+
+
+def test_an_explicit_list_still_restricts():
+    from visiontak_client.config import Config
+    from visiontak_client.ui.policy import HostAllowlist
+
+    cfg = Config(allowed_hosts="grafana.example")
+    seed = [h.strip() for h in cfg.allowed_hosts.split(",") if h.strip()]
+    allowlist = HostAllowlist(seed)
+    assert not allowlist.allows_any
+    assert allowlist.permits("https://grafana.example/d/1")
+    assert not allowlist.permits("https://youtube.com/embed/x")

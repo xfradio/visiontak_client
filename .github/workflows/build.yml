@@ -18,8 +18,8 @@ jobs:
     name: tests + lint
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
       # No GTK, CEC hardware or server needed — see the README.
@@ -28,23 +28,19 @@ jobs:
       - run: ruff check src tests
 
   snap:
-    name: snap (${{ matrix.platform }})
+    name: snap (arm64)
     needs: test
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          # arm64 must build on an arm64 runner. Cross-building is not possible for
-          # this project: the gnome extension needs mesa-2404 and gnome-46-2404-sdk
-          # as build-snaps matching the *target* arch, and snapd cannot install arm64
-          # snaps into an amd64 container. See docs/arm64-build.md.
-          - platform: arm64
-            runner: ubuntu-24.04-arm
-          - platform: amd64
-            runner: ubuntu-24.04
-    runs-on: ${{ matrix.runner }}
+    # arm64 only: the Pi is the target and nothing else consumes an amd64 build. The
+    # local test VM still needs one, but that is `make snap-amd64` on a workstation
+    # rather than something CI should spend a runner on every push.
+    #
+    # It must build on an arm64 runner. Cross-building is not possible for this
+    # project: the gnome extension needs mesa-2404 and gnome-46-2404-sdk as
+    # build-snaps matching the *target* arch, and snapd cannot install arm64 snaps
+    # into an amd64 container. See docs/arm64-build.md.
+    runs-on: ubuntu-24.04-arm
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Warn if the logo is missing
         run: |
@@ -52,10 +48,25 @@ jobs:
             echo "::warning::assets/visiontak-logo.png absent — the snap will ship a text splash"
           fi
 
-      - uses: snapcore/action-build@v1
+      # snapcraft is invoked directly rather than through snapcore/action-build:
+      # that action last saw a commit in July 2024, still targets Node 20, and is the
+      # only remaining source of the deprecation warning. Calling snapcraft ourselves
+      # removes the dependency instead of waiting on an unmaintained upstream — and
+      # keeps a stale third-party action out of the path that builds a signed image.
+      #
+      # Destructive mode is right for an ephemeral runner: the runner *is* the
+      # disposable build host, and it skips launching an LXD container to hold a copy
+      # of the same 24.04 userland. The runner is ubuntu-24.04, which is the core24
+      # base for arm64 too, so the build links against the correct libraries.
+      - name: Build the snap
         id: build
-        with:
-          snapcraft-args: pack --build-for=${{ matrix.platform }}
+        run: |
+          sudo snap install snapcraft --classic
+          sudo apt-get install -y -qq squashfs-tools
+          sudo snapcraft pack --destructive-mode --build-for=arm64
+          snap_file=$(ls -1 visiontak-client_*_arm64.snap | head -1)
+          test -n "$snap_file" || { echo "::error::no arm64 snap produced"; exit 1; }
+          echo "snap=$snap_file" >> "$GITHUB_OUTPUT"
 
       # The build can succeed while shipping no artwork, which is only visible on a
       # display. Assert it landed rather than finding out on the Pi.
@@ -66,9 +77,9 @@ jobs:
           test -f /tmp/snapcheck/assets/visiontak-logo.png \
             || { echo "::error::logo missing from the built snap"; exit 1; }
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
-          name: visiontak-client-${{ matrix.platform }}
+          name: visiontak-client-arm64
           path: ${{ steps.build.outputs.snap }}
           if-no-files-found: error
 
@@ -81,9 +92,9 @@ jobs:
     if: vars.BRAND_ID != '' && github.event_name != 'pull_request'
     runs-on: ubuntu-24.04-arm
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           name: visiontak-client-arm64
           path: dist
@@ -98,22 +109,112 @@ jobs:
       - name: Import the model signing key
         env:
           MODEL_SIGN_KEY: ${{ secrets.MODEL_SIGN_KEY }}
+          MODEL_SIGN_PASSPHRASE: ${{ secrets.MODEL_SIGN_PASSPHRASE }}
+          MODEL_KEY: ${{ vars.MODEL_KEY }}
         run: |
+          set -eu
           test -n "$MODEL_SIGN_KEY" || { echo "::error::MODEL_SIGN_KEY secret is empty"; exit 1; }
-          mkdir -p ~/.snap/gnupg && chmod 700 ~/.snap/gnupg
-          printf '%s' "$MODEL_SIGN_KEY" | GNUPGHOME=~/.snap/gnupg gpg --batch --import
-          GNUPGHOME=~/.snap/gnupg gpg --batch --list-secret-keys
+          export GNUPGHOME="$HOME/.snap/gnupg"
+          mkdir -p "$GNUPGHOME" && chmod 700 "$GNUPGHOME"
+
+          # GnuPG puts the gpg-agent socket under /run/user/$UID when that path exists.
+          # A hosted runner has no systemd user session, so it does not — and every
+          # signature then fails with the singularly unhelpful
+          # "gpg: signing failed: No such file or directory".
+          sudo mkdir -p "/run/user/$(id -u)"
+          sudo chown "$(id -u):$(id -g)" "/run/user/$(id -u)"
+          chmod 700 "/run/user/$(id -u)"
+
+          # `snap sign` shells out to gpg with no passphrase arguments, so a protected
+          # key can only work if gpg-agent already holds the secret. Preset it rather
+          # than using loopback pinentry, which needs input gpg cannot ask for under
+          # --batch ("Sorry, we are in batchmode - can't get input").
+          {
+            echo 'allow-preset-passphrase'
+            echo 'allow-loopback-pinentry'
+            echo 'default-cache-ttl 7200'
+            echo 'max-cache-ttl 7200'
+          } >> "$GNUPGHOME/gpg-agent.conf"
+
+          printf '%s' "$MODEL_SIGN_KEY" | gpg --batch --import
+          gpgconf --launch gpg-agent
+          gpgconf --reload gpg-agent
+          gpg --batch --list-secret-keys
+
+          if [ -n "${MODEL_SIGN_PASSPHRASE:-}" ]; then
+            KEYGRIP=$(gpg --batch --with-colons --with-keygrip \
+              --list-secret-keys "$MODEL_KEY" | awk -F: '/^grp:/ {print $10; exit}')
+            test -n "$KEYGRIP" || { echo "::error::could not read the keygrip for '$MODEL_KEY'"; exit 1; }
+            printf '%s' "$MODEL_SIGN_PASSPHRASE" \
+              | /usr/lib/gnupg/gpg-preset-passphrase --preset "$KEYGRIP"
+            echo "passphrase preset into gpg-agent"
+          fi
+
+          # Prove the key can actually sign before spending ten minutes building a
+          # gadget we would only throw away.
+          echo probe | gpg --batch --yes --local-user "$MODEL_KEY" --detach-sign -o /dev/null \
+            || { echo "::error::imported key cannot sign — does MODEL_KEY ('$MODEL_KEY') match the key UID above?"; exit 1; }
+          echo "signing works"
 
       - name: Build the image
+        shell: bash
         env:
           BRAND_ID: ${{ vars.BRAND_ID }}
           MODEL_KEY: ${{ vars.MODEL_KEY }}
-        run: sh image/build-image.sh dist/visiontak-client_*_arm64.snap
+        # -x so a failure names the command that failed; the job log is the only
+        # diagnostic available for a build that cannot be reproduced off arm64.
+        run: |
+          set -o pipefail
+          mkdir -p /tmp/images
+          sh -x image/build-image.sh dist/visiontak-client_*_arm64.snap 2>&1 | tee /tmp/build.log
+          cp image/out/*.img.xz /tmp/images/
 
-      - uses: actions/upload-artifact@v4
+      # A second image with the CEC gadget bits left out. The device currently stalls
+      # on "Installing Ubuntu Core", which creates neither a console nor the SSH
+      # account, so nothing on it can be asked what went wrong. A gadget snapd refuses
+      # is a known cause of that, and the CEC slot is the only part of this gadget that
+      # is not stock — so this pairs a suspect-free image with the real one and settles
+      # it in a single build instead of another round of guessing.
+      #
+      # The script wipes image/out on each run, hence staging into /tmp/images.
+      # Delete this step once the cause is known.
+      - name: Build a CEC-free image to isolate the boot stall
+        shell: bash
+        env:
+          BRAND_ID: ${{ vars.BRAND_ID }}
+          MODEL_KEY: ${{ vars.MODEL_KEY }}
+          CEC_SLOT: "0"
+          IMAGE_NAME: visiontak_client-nocec
+        run: |
+          set -o pipefail
+          sh -x image/build-image.sh dist/visiontak-client_*_arm64.snap 2>&1 | tee /tmp/build-nocec.log
+          cp image/out/*.img.xz /tmp/images/
+          ls -la /tmp/images/
+
+      - name: Diagnostics on failure
+        if: failure()
+        shell: bash
+        run: |
+          echo "--- model ---";        cat image/work/model.json 2>/dev/null || true
+          echo "--- signing keys ---"; GNUPGHOME=~/.snap/gnupg gpg --batch --list-secret-keys 2>&1 || true
+          echo "--- snap keys ---";    snap keys 2>&1 || true
+          echo "--- gadget tree ---";  ls -la image/work/pi-gadget 2>/dev/null || true
+          echo "--- disk ---";         df -h / | tail -1
+          # Re-emit the tail as annotations. Workflow logs need an authenticated
+          # token to download, but annotations are readable from the public API —
+          # so this is what makes a failure diagnosable without hand-copying it.
+          # One annotation carrying the whole tail: GitHub only surfaces a handful of
+          # per-line annotations, which silently dropped the actual error last time.
+          if [ -f /tmp/build.log ]; then
+            ENC=$(tail -n 60 /tmp/build.log \
+              | sed -z 's/%/%25/g; s/\r/%0D/g; s/\n/%0A/g')
+            echo "::error title=build tail::${ENC}"
+          fi
+
+      - uses: actions/upload-artifact@v7
         with:
           name: visiontak-pi-sdcard-image
-          path: image/out/*.img.xz
+          path: /tmp/images/*.img.xz
           if-no-files-found: error
 
   release:
@@ -124,11 +225,11 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           path: dist
           merge-multiple: true
-      - uses: softprops/action-gh-release@v2
+      - uses: softprops/action-gh-release@v3
         with:
           files: dist/*.snap
           generate_release_notes: true

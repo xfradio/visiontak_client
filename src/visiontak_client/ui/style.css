@@ -98,3 +98,44 @@ stack {
   background-color: #000000;
   padding: 48px;
 }
+
+/* First-run setup. Sized for a television read from across a room, not a desk:
+   large type, high contrast, one focal point. Green picks up the logo's accent. */
+.vt-setup {
+  background-color: #000000;
+  padding: 64px;
+}
+
+.vt-setup-heading {
+  color: #ffffff;
+  font-size: 30px;
+  font-weight: 600;
+}
+
+.vt-setup-entry {
+  font-size: 26px;
+  padding: 14px 18px;
+  color: #ffffff;
+  background-color: #111111;
+  border: 2px solid #6ab023;
+  border-radius: 6px;
+  caret-color: #6ab023;
+}
+
+.vt-setup-entry:focus {
+  border-color: #8fd83a;
+}
+
+.vt-setup-status {
+  color: #b9b9b9;
+  font-size: 19px;
+}
+
+.vt-setup-error {
+  color: #ff6b6b;
+}
+
+.vt-setup-hint {
+  color: #6f6f6f;
+  font-size: 15px;
+}

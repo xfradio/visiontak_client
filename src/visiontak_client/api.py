@@ -30,6 +30,32 @@ from .models import Dashboard, sort_dashboards
 log = logging.getLogger(__name__)
 
 CLIENT_CONFIG_PATH = "/api/v1/client/config"
+REGISTER_PATH = "/api/v1/client/register"
+DEVICE_TYPE = "raspberry_pi"
+LABEL_MAX_LEN = 120
+
+
+@dataclass(frozen=True)
+class Registration:
+    """The server's answer to an enrolment attempt.
+
+    Three outcomes matter and they are not interchangeable:
+      pending          — an admin has not approved this device yet; ask again later.
+      approved + token — the one and only delivery of that token. Persist it now.
+      approved, no token — already approved and the token was handed out before. If
+                           we do not have it, nobody can re-issue it from here.
+    """
+
+    status: str
+    token: str = ""
+
+    @property
+    def pending(self) -> bool:
+        return self.status == "pending"
+
+    @property
+    def approved(self) -> bool:
+        return self.status == "approved"
 
 # The server is a Next.js app with a catch-all route: an unknown path returns the SPA
 # shell with HTTP 200 rather than a 404. A JSON parse failure therefore means "wrong
@@ -133,6 +159,38 @@ class VisionTakClient:
 
     def fetch_client_config(self) -> ClientConfig:
         return parse_client_config(self._request("GET", CLIENT_CONFIG_PATH), self.base_url)
+
+    def register(self, *, label: str = "") -> Registration:
+        """Enrol this device. The only endpoint callable before we hold a token.
+
+        Safe to call repeatedly: the server recognises a repeat by deviceId, which is
+        why that id must be stable across reboots.
+        """
+        payload: dict[str, Any] = {
+            "deviceId": self._config.device_id,
+            "deviceType": DEVICE_TYPE,
+        }
+        if label:
+            payload["label"] = label[:LABEL_MAX_LEN]
+
+        body = self._request("POST", REGISTER_PATH, payload)
+        if not isinstance(body, dict):
+            raise ApiError(f"register returned {type(body).__name__}, not an object")
+
+        status = str(body.get("status") or "")
+        raw_token = body.get("token")
+        token = raw_token if isinstance(raw_token, str) and raw_token else ""
+
+        if status == "approved" and not token:
+            # Not an error the device can fix: the token was delivered on an earlier
+            # call and the server will not repeat it. Say so plainly, because the
+            # symptom otherwise is an approved device that still cannot authenticate.
+            log.warning(
+                "device is approved but the server did not return a token — it was "
+                "delivered previously. If this device does not have it, an admin must "
+                "re-issue the registration."
+            )
+        return Registration(status=status, token=token)
 
 
 class ConfigCache:

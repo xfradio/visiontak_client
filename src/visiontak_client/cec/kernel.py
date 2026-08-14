@@ -134,6 +134,19 @@ class KernelCecBackend(CecBackend):
             u.CEC_MSG_ACTIVE_SOURCE,
             bytes([self._phys_addr >> 8, self._phys_addr & 0xFF]),
         )
+        self.send_osd_name()
+
+    def send_osd_name(self, destination: int = u.CEC_LOG_ADDR_TV) -> None:
+        """Tell the TV what to call this input.
+
+        The kernel already answers <Give OSD Name> from the name in the logical-address
+        config, so a TV that asks gets it for free. Not every TV asks: some only label a
+        source from an unsolicited <Set OSD Name>, and others cache whatever they saw
+        first and never refresh. Sending it on announce covers both without waiting.
+        """
+        if not self._osd_name:
+            return
+        self._transmit(destination, u.CEC_MSG_SET_OSD_NAME, self._osd_name)
 
     # -- receive -----------------------------------------------------------
 

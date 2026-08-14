@@ -75,8 +75,10 @@ All via `snap set visiontak-client <key>=<value>`:
 
 `server-url`, `api-token`, `device-id`, `cec-backend` (`auto`|`kernel`|`libcec`|`none`),
 `cec-device`, `osd-name`, `refresh-interval`, `rotate-interval`, `start-dashboard`,
-`verify-tls`, `allowed-hosts`, `max-live-views`, `hardware-acceleration`.
-On a Pi 3 B+ set `max-live-views=1` and `hardware-acceleration=never` — see
+`verify-tls`, `allowed-hosts`, `max-live-views`, `hardware-acceleration`,
+`dhcp-discovery`. `allowed-hosts` defaults to `*` because dashboards embed
+third-party content; narrow it per device where the dashboards are known.
+The client tunes itself per board — see [`docs/raspberry-pi-models.md`](docs/raspberry-pi-models.md) and
 [`docs/raspberry-pi-3.md`](docs/raspberry-pi-3.md). Defaults and validation rules are in
 [`.pandaos/specs/S001-visiontak-client.md`](.pandaos/specs/S001-visiontak-client.md).
 
@@ -84,6 +86,9 @@ The `configure` hook validates the result with `--check-config` and **fails the
 `snap set`** if it is unusable, rather than letting the daemon crash-loop.
 
 ## Remote control
+
+The keyboard is captured before the webview, so kiosk keys work while a dashboard is
+showing; unmapped keys still reach the page.
 
 Arrows navigate, OK opens the chooser and confirms, Back closes, 1–9 jump straight to a
 dashboard, Ch±/◀▶ step through them, Green reloads, Yellow pauses the carousel, Blue

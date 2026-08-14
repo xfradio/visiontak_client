@@ -6,6 +6,7 @@ worker threads so a slow or dead server can never stall the compositor's client.
 
 from __future__ import annotations
 
+import dataclasses
 import logging
 import threading
 
@@ -14,6 +15,7 @@ from .api import ApiError, AuthError, ClientConfig, ConfigCache, VisionTakClient
 from .cec import CecEvent, CecEventKind, CecReader, create_backend
 from .cec.keymap import action_for
 from .config import Config
+from .firstrun import POLL_SECONDS, attempt_registration
 from .ui.app import idle
 
 log = logging.getLogger(__name__)
@@ -30,6 +32,7 @@ class KioskController:
         self._window = None
         self._reader: CecReader | None = None
         self._refresh_timer: threading.Timer | None = None
+        self._registration_timer: threading.Timer | None = None
         self._rotate_source = 0
         self._rotating = bool(config.rotate_interval)
         self._server_default: str | None = None
@@ -39,15 +42,99 @@ class KioskController:
 
     def attach(self, window) -> None:  # noqa: ANN001 - KioskWindow, avoids import cycle
         self._window = window
+        window.on_configured = self._configure_from_setup
         self._apply(self._cache.load(self._client.base_url), from_cache=True)
         self._start_cec()
+        self._start_registration()
         self._schedule_refresh(FIRST_REFRESH_DELAY_SECONDS)
         self._apply_rotation()
+
+    # -- enrolment ---------------------------------------------------------
+
+    def _configure_from_setup(self, url: str) -> None:
+        """Apply an address typed on the setup screen and enrol with it now.
+
+        On a worker thread: registration is a network call, and blocking the GTK loop
+        would freeze the very screen that is meant to report progress.
+        """
+        self._config = dataclasses.replace(self._config, server_url=url)
+        self._client = VisionTakClient(self._config)
+        idle(self._window.setup_status, "Registering with the server…")
+        threading.Thread(
+            target=self._register_from_setup, name="setup-register", daemon=True
+        ).start()
+
+    def _register_from_setup(self) -> None:
+        result, config = attempt_registration(self._config)
+        self._config = config
+
+        if result is None:
+            # The address saved, but nothing answered. Stay on setup so the address
+            # can be corrected rather than leaving a blank screen behind.
+            idle(
+                self._window.setup_status,
+                f"Saved, but {self._config.server_url} did not answer",
+                error=True,
+            )
+            return
+
+        if result.approved and config.api_token:
+            self._client = VisionTakClient(config)
+            idle(self._window.setup_status, "Approved — starting up")
+            idle(self._window.leave_setup)
+            self._schedule_refresh(0.5)
+            return
+
+        idle(self._window.setup_status, "Registered — waiting for approval")
+        idle(self._window.leave_setup)
+        idle(self._window.set_enrolment_status, "Waiting for approval on the server")
+        self._start_registration()
+
+    def _start_registration(self) -> None:
+        """Enrol, and keep asking while the server says pending.
+
+        A new device stays pending until an admin approves it, which can be days and
+        several reboots away. Polling in the background means the display picks the
+        token up on its own the moment that happens, rather than needing a power cycle
+        timed to the approval.
+        """
+        if not self._config.server_url or self._config.api_token:
+            return
+        self._registration_timer = threading.Timer(0.5, self._poll_registration)
+        self._registration_timer.name = "registration"
+        self._registration_timer.daemon = True
+        self._registration_timer.start()
+
+    def _poll_registration(self) -> None:
+        if self._stopped.is_set():
+            return
+        result, config = attempt_registration(self._config)
+        self._config = config
+
+        if result is not None and result.approved and config.api_token:
+            log.info("approved — reloading with the issued token")
+            self._client = VisionTakClient(config)
+            idle(self._window.set_enrolment_status, "")
+            self._schedule_refresh(0.5)
+            return
+
+        if result is not None and result.pending:
+            idle(self._window.set_enrolment_status, "Waiting for approval on the server")
+        elif result is not None and result.approved:
+            # Approved with no token, and we have none: an admin has to re-issue.
+            idle(self._window.set_enrolment_status, "Approved, but no token was issued")
+
+        self._registration_timer = threading.Timer(POLL_SECONDS, self._poll_registration)
+        self._registration_timer.name = "registration"
+        self._registration_timer.daemon = True
+        self._registration_timer.start()
 
     def stop(self) -> None:
         self._stopped.set()
         if self._refresh_timer is not None:
             self._refresh_timer.cancel()
+        if self._registration_timer is not None:
+            self._registration_timer.cancel()
         if self._reader is not None:
             self._reader.stop()
         self._cancel_rotation()
@@ -113,16 +200,28 @@ class KioskController:
         )
         self._reader = CecReader(backend, self._on_cec_event)
         self._reader.start()
-        idle(self._window.set_status, type(backend).__name__)
+        # Report *why* CEC is inactive, not just that it is. The fallback carries a
+        # reason ("/dev/cec0 missing" is the usual one, meaning the hdmi-cec interface
+        # is not connected) and dropping it left the panel saying NullCecBackend with
+        # no way to tell a missing device from a missing interface from a wrong
+        # setting — on a unit with no login.
+        detail = getattr(backend, "reason", "") or ""
+        name = type(backend).__name__
+        log.info("CEC backend: %s%s", name, f" ({detail})" if detail else "")
+        idle(self._window.set_status, f"{name} ({detail})" if detail else name)
 
     def _on_cec_event(self, event: CecEvent) -> None:
         """Runs on the CEC reader thread."""
         if event.kind is CecEventKind.KEY_PRESS and event.key_code is not None:
             action = action_for(event.key_code)
+            # INFO, not debug. "The remote does nothing" has several causes that look
+            # identical from outside — no adapter, no logical address, the TV sending
+            # nothing, or a code we do not map — and at debug level the logs could not
+            # tell them apart. A remote press is rare enough to be worth a line.
             if action is None:
-                log.debug("unmapped CEC key 0x%02x", event.key_code)
+                log.warning("CEC key 0x%02x received but not mapped", event.key_code)
                 return
-            log.debug("CEC key 0x%02x -> %s", event.key_code, action)
+            log.info("CEC key 0x%02x -> %s", event.key_code, action)
             idle(self._dispatch, action)
         elif event.kind is CecEventKind.STANDBY:
             idle(self._window.set_blanked, True)

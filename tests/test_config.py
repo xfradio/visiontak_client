@@ -67,3 +67,53 @@ def test_malformed_config_file_is_a_clear_error(tmp_path):
 def test_write_snap_config_round_trips(tmp_path):
     config_module.write_snap_config(tmp_path, {"server-url": "https://vt.example"})
     assert config_module.load(tmp_path, environ={}).server_url == "https://vt.example"
+
+
+def test_small_board_gets_the_low_memory_profile(tmp_path, monkeypatch):
+    """A field unit has no login, so nobody can `snap set` it back from swapping."""
+    monkeypatch.setattr(config_module, "_total_memory_mib", lambda: 950)
+    cfg = config_module.load(tmp_path, environ={})
+    assert cfg.max_live_views == 1
+    assert cfg.hardware_acceleration == "never"
+
+
+def test_explicit_settings_beat_the_low_memory_profile(tmp_path, monkeypatch):
+    monkeypatch.setattr(config_module, "_total_memory_mib", lambda: 950)
+    (tmp_path / config_module.CONFIG_BASENAME).write_text(
+        '{"max-live-views": "3", "hardware-acceleration": "always"}'
+    )
+    cfg = config_module.load(tmp_path, environ={})
+    assert cfg.max_live_views == 3
+    assert cfg.hardware_acceleration == "always"
+
+
+def test_a_2gb_pi4_keeps_the_defaults(tmp_path, monkeypatch):
+    """Between the tiers: too much memory to cripple, not enough to spend."""
+    monkeypatch.setattr(config_module, "_total_memory_mib", lambda: 1900)
+    cfg = config_module.load(tmp_path, environ={})
+    assert cfg.max_live_views == 3
+    assert cfg.hardware_acceleration == "auto"
+
+
+def test_a_4gb_board_keeps_more_dashboards_live(tmp_path, monkeypatch):
+    """Reloading an evicted dashboard is the slowest thing on screen; a 4 GiB Pi 4
+    has the room to avoid it entirely."""
+    monkeypatch.setattr(config_module, "_total_memory_mib", lambda: 3800)
+    cfg = config_module.load(tmp_path, environ={})
+    assert cfg.max_live_views == config_module.HIGH_MEMORY_LIVE_VIEWS
+    # Left to WebKit: forcing it on has not been verified across panels.
+    assert cfg.hardware_acceleration == "auto"
+
+
+def test_explicit_settings_beat_the_high_memory_profile(tmp_path, monkeypatch):
+    monkeypatch.setattr(config_module, "_total_memory_mib", lambda: 7900)
+    (tmp_path / config_module.CONFIG_BASENAME).write_text('{"max-live-views": "2"}')
+    assert config_module.load(tmp_path, environ={}).max_live_views == 2
+
+
+def test_an_unreadable_meminfo_changes_nothing(tmp_path, monkeypatch):
+    """Neither tier applies where the board cannot be identified."""
+    monkeypatch.setattr(config_module, "_total_memory_mib", lambda: None)
+    cfg = config_module.load(tmp_path, environ={})
+    assert cfg.max_live_views == 3
+    assert cfg.hardware_acceleration == "auto"

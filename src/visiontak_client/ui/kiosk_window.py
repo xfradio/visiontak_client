@@ -8,6 +8,7 @@ a status toast and a blanking layer.
 from __future__ import annotations
 
 import logging
+from pathlib import Path
 
 import gi
 
@@ -16,12 +17,15 @@ gi.require_version("Gdk", "4.0")  # imported lazily in _black() below
 gi.require_version("WebKit", "6.0")
 from gi.repository import GLib, Gtk, WebKit  # noqa: E402
 
+from .. import __version__  # noqa: E402
 from ..actions import Action, DigitAction  # noqa: E402
 from ..branding import logo_path  # noqa: E402
 from ..config import Config  # noqa: E402
 from ..models import Dashboard  # noqa: E402
+from ..netinfo import local_ip  # noqa: E402
 from .menu import DashboardMenu  # noqa: E402
 from .policy import HostAllowlist, make_policy_handler  # noqa: E402
+from .setup import SetupScreen  # noqa: E402
 
 log = logging.getLogger(__name__)
 
@@ -50,8 +54,17 @@ class KioskWindow(Gtk.ApplicationWindow):
 
         self._stack = Gtk.Stack(transition_type=Gtk.StackTransitionType.CROSSFADE)
         self._stack.set_transition_duration(180)
-        self._placeholder = _build_splash("Waiting for dashboards…")
+        self._placeholder, self._placeholder_label = _build_splash("Waiting for dashboards…")
         self._stack.add_named(self._placeholder, "__placeholder__")
+
+        # A display with no server address configured cannot do anything useful, and
+        # there is no other way to tell it one without a console. Ask on screen.
+        # Set by the controller in attach(); the window has no business doing network
+        # work itself, but it is where the address is typed.
+        self.on_configured = None
+        self._setup = SetupScreen(self._on_setup_submit)
+        self._stack.add_named(self._setup, "__setup__")
+        self._needs_setup = not config.server_url
 
         self._menu = DashboardMenu(self._on_menu_activate)
         self._toast = _build_toast()
@@ -59,7 +72,7 @@ class KioskWindow(Gtk.ApplicationWindow):
         self._blank = _build_blank()
         # Covers the webview until its first paint, so a slow board shows the brand
         # rather than a white flash or a half-drawn dashboard.
-        self._loading = _build_splash("Connecting…")
+        self._loading, _ = _build_splash("Connecting…")
         self._loading.set_visible(False)
         self._loading_ids: set[str] = set()
 
@@ -68,6 +81,13 @@ class KioskWindow(Gtk.ApplicationWindow):
         for widget in (self._info, self._menu, self._toast, self._loading, self._blank):
             overlay.add_overlay(widget)
         self.set_child(overlay)
+
+        if self._needs_setup:
+            log.info("no server-url configured — showing first-run setup")
+            self._stack.set_visible_child(self._setup)
+            self._setup.focus_entry()
+            if config.dhcp_discovery:
+                self._setup.show_discovery_detail()
 
     # -- dashboards --------------------------------------------------------
 
@@ -81,7 +101,63 @@ class KioskWindow(Gtk.ApplicationWindow):
             return self._dashboards[self._current]
         return None
 
+    def set_enrolment_status(self, message: str) -> None:
+        """Replace the placeholder's caption while awaiting approval.
+
+        Distinct from set_status, which reports CEC state into the diagnostics panel.
+
+        A device sitting unapproved otherwise shows 'Waiting for dashboards…' forever,
+        which sends whoever installed it looking for a fault that is not there.
+        """
+        self._placeholder_label.set_label(message or "Waiting for dashboards…")
+
+    @property
+    def setup_active(self) -> bool:
+        """True while the setup field owns the keyboard, so key actions stand down."""
+        return self._needs_setup
+
+    def setup_status(self, message: str, *, error: bool = False) -> None:
+        """Report progress on the setup screen, from any thread via idle()."""
+        self._setup.set_status(message, error=error)
+        if error:
+            self._setup.reset_for_retry()
+
+    def leave_setup(self) -> None:
+        """Hand the screen back to the kiosk once an address is accepted."""
+        if not self._needs_setup:
+            return
+        self._needs_setup = False
+        self._stack.set_visible_child(self._placeholder)
+
+    def _on_setup_submit(self, url: str) -> str | None:
+        """Persist the address and enrol with it. Returns an error to show, or None.
+
+        Registration happens here rather than being left to a daemon restart. The
+        earlier version only wrote the setting and trusted the configure hook to
+        restart us; when that did not happen the screen still said "Saved" and the
+        device never appeared on the server, with nothing on screen to say so.
+        """
+        from ..config import persist
+
+        try:
+            persist("server-url", url)
+        except Exception as exc:  # noqa: BLE001 - surfaced on screen, not swallowed
+            log.error("could not save server-url: %s", exc)
+            return f"Could not save: {exc}"
+        log.info("server-url set to %s from the setup screen", url)
+
+        if self.on_configured is None:
+            # No controller attached (unit tests, --check-config). The setting is
+            # saved; the next start will use it.
+            return None
+        self.on_configured(url)
+        return None
+
     def set_dashboards(self, dashboards: list[Dashboard], *, keep_current: bool = True) -> None:
+        if self._needs_setup:
+            # Nothing the server says is interesting until it has been told where the
+            # server is; leaving setup on screen beats flashing a placeholder over it.
+            return
         previous = self.current_dashboard
         self._dashboards = dashboards
         for dashboard in dashboards:
@@ -293,10 +369,19 @@ class KioskWindow(Gtk.ApplicationWindow):
         dashboard = self.current_dashboard
         lines = [
             f"Device      {self._config.device_id}",
+            # The only way to learn where to SSH to. A wall display shows nothing else
+            # about itself, and every Ubuntu Core unit is called "localhost".
+            f"Address     {local_ip(self._config.server_url) or '(no network)'}",
             f"Server      {self._config.server_url or '(unset)'}",
             f"Dashboard   {dashboard.name if dashboard else '—'}"
             + (f"  [{self._current + 1}/{len(self._dashboards)}]" if dashboard else ""),
             f"CEC         {getattr(self, '_cec_status', 'starting')}",
+            # The TV showing "raspberry" instead of this name means either the adapter
+            # was never claimed (see the CEC line above) or the set cached the Pi
+            # firmware's identity from before Linux started.
+            f"OSD name    {self._config.osd_name}",
+            f"CEC device  {self._config.cec_device} "
+            f"({'present' if Path(self._config.cec_device).exists() else 'MISSING'})",
         ]
         self._info.set_label("\n".join(lines))
 
@@ -330,18 +415,20 @@ def _build_web_settings(config: Config) -> WebKit.Settings:
         "enable_html5_database": True,
         "enable_html5_local_storage": True,
         "hardware_acceleration_policy": _accel_policy(config.hardware_acceleration),
-        "user_agent": "VisionTAK-Kiosk (Ubuntu Core; Wayland)",
-        # Kiosk economies. A dashboard is never navigated back to, nothing here
-        # captures a camera, and the page cache exists to make the back button fast —
-        # all of it is memory a 1 GiB board would rather spend on the render tree.
+        # Kiosk economies. A dashboard is never navigated back to and nothing here
+        # captures a camera, so both are memory a 1 GiB board would rather spend on
+        # the render tree.
         "enable_page_cache": False,
         "enable_media_stream": False,
-        "media_playback_requires_user_gesture": True,
         "enable_smooth_scrolling": False,
-        # WebGL on VideoCore IV falls back to a software rasteriser that costs far more
-        # than it returns, so it follows the acceleration setting rather than the
-        # WebKit default.
-        "enable_webgl": config.hardware_acceleration == "always",
+        # Autoplay. There is nobody in front of a wall display to click a video, so
+        # requiring a gesture means embedded media simply never starts — which is what
+        # happened to the YouTube tiles on a live dashboard.
+        "media_playback_requires_user_gesture": False,
+        # On only when we are not forcing the software path. Tying this to "always"
+        # left WebGL off under the default "auto" as well, which silently broke any
+        # dashboard embedding a map or a chart that needs it.
+        "enable_webgl": config.hardware_acceleration != "never",
     }
     # WebKitGTK property sets differ between releases, and passing an unknown one to
     # the constructor is a hard TypeError at startup. The Pi's WebKit is not
@@ -350,7 +437,14 @@ def _build_web_settings(config: Config) -> WebKit.Settings:
     unknown = sorted(set(wanted) - available)
     if unknown:
         log.debug("WebKit build has no such settings, ignoring: %s", ", ".join(unknown))
-    return WebKit.Settings(**{k: v for k, v in wanted.items() if k in available})
+    settings = WebKit.Settings(**{k: v for k, v in wanted.items() if k in available})
+
+    # Append to WebKit's own user agent rather than replacing it. A bare
+    # "VisionTAK-Kiosk" string matches no browser any site has heard of, and video
+    # providers respond by refusing to serve a playable format at all — YouTube says
+    # "your browser can't play this video" before codecs even come into it.
+    settings.set_user_agent_with_application_details("VisionTAK-Kiosk", __version__)
+    return settings
 
 
 def _black():
@@ -365,7 +459,7 @@ def _host_of(uri: str) -> str:
     return urlparse(uri).hostname or uri
 
 
-def _build_splash(message: str) -> Gtk.Widget:
+def _build_splash(message: str) -> tuple[Gtk.Widget, Gtk.Label]:
     """Logo over a black field. Used for both 'no dashboards yet' and 'connecting'."""
     box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=28)
     box.set_halign(Gtk.Align.CENTER)
@@ -384,7 +478,9 @@ def _build_splash(message: str) -> Gtk.Widget:
     label.add_css_class("vt-placeholder")
     label.set_justify(Gtk.Justification.CENTER)
     box.append(label)
-    return box
+    # The caption is returned too, so callers can update it in place — an unapproved
+    # device needs to say why it is waiting.
+    return box, label
 
 
 def _build_toast() -> Gtk.Label:

@@ -84,3 +84,28 @@ half-drawn dashboard.
 Ship a square master of at least 512×512 in `assets/`. Do not ship a 4K PNG and rely on
 scaling — a Cortex-A53 decodes it on every splash, and the Pi 3's framebuffer tops out
 at 1920×1080.
+
+## The splash and CEC pull against each other
+
+CEC needs full KMS: under fake KMS the firmware owns the display and Linux registers
+no CEC adapter, so `/dev/cec0` never exists. Switching to `vc4-kms-v3d` for that
+reason cost the boot splash on the first attempt — the screen showed the text console
+instead.
+
+The cause is `vt.handoff=2` in the gadget's `cmdline.txt`. It defers the console to a
+firmware framebuffer, which full KMS never creates, so the handoff has no owner and
+plymouth never takes the screen. It belongs with fake KMS, so the build now removes it
+whenever it selects full KMS, and adds `plymouth.ignore-serial-consoles` because the
+command line lists a serial console that plymouth may otherwise claim.
+
+If the splash still does not appear under full KMS, the remaining suspect is the
+initramfs: plymouth needs a DRM device at the moment it starts, and the vc4 module
+comes from the kernel snap, which this build does not control. In that case the choice
+is explicit:
+
+```sh
+DISPLAY_DRIVER=fkms image/build-image.sh …   # splash back, no CEC
+```
+
+The client's own logo splash is unaffected either way — it renders under Ubuntu Frame,
+long after the firmware handoff.

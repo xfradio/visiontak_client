@@ -59,9 +59,19 @@ class KioskApplication(Gtk.Application):
     def _install_key_handler(self, window: KioskWindow) -> None:
         controller = Gtk.EventControllerKey()
         controller.connect("key-pressed", self._on_key_pressed)
+        # CAPTURE, not the default BUBBLE. Bubbling gives the focused widget the key
+        # first, and once a dashboard is showing that is a WebView, which swallows
+        # arrows, digits and letters as page input — so every kiosk key did nothing.
+        # Capturing lets the kiosk claim its own keys first; anything it does not map
+        # returns False and still reaches the page.
+        controller.set_propagation_phase(Gtk.PropagationPhase.CAPTURE)
         window.add_controller(controller)
 
     def _on_key_pressed(self, _controller, keyval: int, _keycode: int, _state) -> bool:
+        # During setup the text field owns the keyboard: "h" is a character being
+        # typed into a hostname, not the home-dashboard action.
+        if self.window is not None and self.window.setup_active:
+            return False
         name = Gdk.keyval_name(keyval) or ""
         action = action_for_key_name(name)
         if action is None:
@@ -87,6 +97,6 @@ def _load_css() -> None:
     )
 
 
-def idle(callback, *args) -> None:
+def idle(callback, *args, **kwargs) -> None:
     """Marshal a call from a worker thread onto the GTK main loop."""
-    GLib.idle_add(lambda: (callback(*args), GLib.SOURCE_REMOVE)[1])
+    GLib.idle_add(lambda: (callback(*args, **kwargs), GLib.SOURCE_REMOVE)[1])

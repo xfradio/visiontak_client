@@ -1,7 +1,13 @@
 name: visiontak-client
 base: core24
 adopt-info: visiontak-client
+title: VisionTAK Client
 summary: VisionTAK dashboard kiosk for Ubuntu Core
+website: https://xfradio.net
+license: Apache-2.0
+contact: https://github.com/xfradio/visiontak_client/issues
+issues: https://github.com/xfradio/visiontak_client/issues
+source-code: https://github.com/xfradio/visiontak_client
 description: |
   A full-screen, CEC-driven client for VisionTAK Server, built for unattended
   displays running Ubuntu Core.
@@ -67,6 +73,9 @@ apps:
       - network-bind
       - browser-support
       - hardware-observe
+      # Reads systemd-networkd's DHCP lease to find the server from option 225.
+      # Observe-only: it grants no ability to change the network configuration.
+      - network-setup-observe
       - hdmi-cec
     environment:
       GDK_BACKEND: wayland
@@ -77,6 +86,11 @@ apps:
       WEBKIT_FORCE_SANDBOX: "0"
       # WEBKIT_EXEC_PATH deliberately not set: the 6.0 series ignores it. The helper
       # processes are reached through the `layout` below instead.
+      #
+      # GST_PLUGIN_PATH adds to the platform's plugin set rather than replacing it,
+      # which GST_PLUGIN_SYSTEM_PATH would. Arch-independent because $SNAPCRAFT_* is
+      # not expanded in this block — it reaches snap.yaml verbatim.
+      GST_PLUGIN_PATH: $SNAP/usr/lib/gstreamer-1.0
       PYTHONPATH: $SNAP/usr/lib/python3/dist-packages:$SNAP/lib/python3.12/site-packages
       # GI_TYPELIB_PATH is deliberately not set here. $SNAPCRAFT_* is not expanded in
       # this block — it reaches snap.yaml verbatim — so the obvious spelling silently
@@ -118,6 +132,16 @@ parts:
       - gir1.2-gtk-4.0
       - gir1.2-webkit-6.0
       - libwebkitgtk-6.0-4
+      # WebKit decodes media through GStreamer, and the gnome platform ships only the
+      # base set. Without these an embedded video renders the player and then reports
+      # "your browser can't play this video" — libav carries the H.264 decoder YouTube
+      # actually serves, and -good carries VP8/VP9.
+      #
+      # -plugins-bad is deliberately absent. It is the largest of the three and adds
+      # nothing either codec needs; including it doubled the snap, which pushed first
+      # boot past the size ubuntu-data had for it.
+      - gstreamer1.0-plugins-good
+      - gstreamer1.0-libav
     # PyGObject comes from the distro packages above rather than pip: the wheel would
     # have to be compiled against the gnome SDK's headers for no benefit.
     # Flatten to an arch-independent path so one `layout` stanza covers both platforms.
@@ -125,6 +149,7 @@ parts:
     # nothing about $SNAPCRAFT_*, which reaches snap.yaml verbatim and resolves to empty.
     organize:
       usr/lib/*/webkitgtk-6.0: usr/lib/webkitgtk-6.0
+      usr/lib/*/gstreamer-1.0: usr/lib/gstreamer-1.0
     prime:
       - -usr/share/doc
       - -usr/share/man
