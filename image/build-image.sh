@@ -30,7 +30,14 @@ OUT="$HERE/out"
 
 case ":$PATH:" in *:/snap/bin:*) ;; *) PATH="$PATH:/snap/bin"; export PATH ;; esac
 
-rm -rf "$WORK" "$OUT"
+# snapcraft runs in destructive mode under sudo and leaves root-owned files behind in
+# the gadget's parts/ tree, so the invoking user cannot clear them on the next run —
+# a plain `rm -rf` dies with "Permission denied" partway through. That makes any
+# second run of this script fail, locally as much as in CI. Escalate only for the
+# leftovers, and only after the unprivileged attempt has done what it can.
+if ! rm -rf "$WORK" "$OUT" 2>/dev/null; then
+  sudo rm -rf "$WORK" "$OUT"
+fi
 mkdir -p "$WORK" "$OUT"
 
 echo "==> boot splash"
