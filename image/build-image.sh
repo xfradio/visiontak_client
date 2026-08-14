@@ -101,7 +101,16 @@ fi
 #
 # Declared here rather than in gadget.yaml: snap slots live in snapcraft.yaml, which
 # becomes meta/snap.yaml. gadget.yaml accepts a slots block and ignores it.
-if ! grep -q '^  hdmi-cec:' "$WORK/pi-gadget/snapcraft.yaml"; then
+#
+# CEC_SLOT=0 omits the slot *and* the matching gadget connection. A gadget snapd will
+# not accept fails first-boot seeding outright, and the device then sits on
+# "Installing Ubuntu Core" forever with no console and no SSH account to ask why —
+# the two are created by the seeding that never finished. This switch exists to take
+# CEC out of the picture in one build rather than guessing at it across several.
+CEC_SLOT="${CEC_SLOT:-1}"
+if [ "$CEC_SLOT" = "0" ]; then
+  echo "==> hdmi-cec slot SKIPPED (CEC_SLOT=0) — remote control will not work"
+elif ! grep -q '^  hdmi-cec:' "$WORK/pi-gadget/snapcraft.yaml"; then
   awk '
     /^slots:/ && !ins {
       print
@@ -287,7 +296,11 @@ fi
 # The slot reference is deliberately omitted — snapd reads that as the gadget's own
 # slot of the same name. Naming it fails to parse ("expected (<snap-id>|system):name")
 # and a locally built gadget has no snap-id to give.
-if ! grep -q '^connections:' "$WORK/pi-gadget/gadget.yaml"; then
+#
+# Skipped with the slot under CEC_SLOT=0: an auto-connection naming a plug whose slot
+# does not exist is exactly the kind of thing that fails seeding, and the two have to
+# be added and removed together.
+if [ "$CEC_SLOT" != "0" ] && ! grep -q '^connections:' "$WORK/pi-gadget/gadget.yaml"; then
   cat >> "$WORK/pi-gadget/gadget.yaml" <<'EOF'
 
 connections:
