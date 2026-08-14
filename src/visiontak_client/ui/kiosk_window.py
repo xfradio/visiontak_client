@@ -50,7 +50,6 @@ class KioskWindow(Gtk.ApplicationWindow):
             log.warning("allowed-hosts=* — navigation is unrestricted")
         self._toast_source = 0
         self._ip_cache: tuple[str, float] = ("", 0.0)
-        self._handlers = self._build_handlers()
         self._session = _build_network_session(config)
 
         self.set_decorated(False)
@@ -74,6 +73,8 @@ class KioskWindow(Gtk.ApplicationWindow):
         self._toast = _build_toast()
         self._info = _build_info_panel()
         self._blank = _build_blank()
+        # After the widgets it dispatches to, not before them.
+        self._handlers = self._build_handlers()
         # Covers the webview until its first paint, so a slow board shows the brand
         # rather than a white flash or a half-drawn dashboard.
         self._loading, _ = _build_splash("Connecting…")
@@ -296,18 +297,26 @@ class KioskWindow(Gtk.ApplicationWindow):
             handler()
 
     def _build_handlers(self) -> dict[Action, object]:
-        """Action table, built once. It was rebuilt — twelve closures — per key press."""
+        """Action table, built once. It was rebuilt — twelve closures — per key press.
+
+        Every entry is a lambda, including those that only forward to one call. A bound
+        method dereferences its object when the table is built rather than when the key
+        is pressed, so `self._menu.close` needed _menu to already exist — and building
+        the table one line too early raised AttributeError inside __init__, killing the
+        daemon before it presented a surface and leaving Frame's grey background on the
+        display. Uniform lambdas make the table independent of construction order.
+        """
         return {
             Action.MENU_TOGGLE: lambda: self._menu.toggle(max(self._current, 0)),
-            Action.MENU_CLOSE: self._menu.close,
+            Action.MENU_CLOSE: lambda: self._menu.close(),
             Action.MENU_UP: lambda: self._menu_step(-1),
             Action.MENU_DOWN: lambda: self._menu_step(1),
-            Action.MENU_ACTIVATE: self._activate,
+            Action.MENU_ACTIVATE: lambda: self._activate(),
             Action.DASHBOARD_NEXT: lambda: self._step(1),
             Action.DASHBOARD_PREV: lambda: self._step(-1),
-            Action.DASHBOARD_RELOAD: self.reload_current,
+            Action.DASHBOARD_RELOAD: lambda: self.reload_current(),
             Action.DASHBOARD_HOME: lambda: self.show_index(0),
-            Action.INFO_TOGGLE: self._toggle_info,
+            Action.INFO_TOGGLE: lambda: self._toggle_info(),
             Action.BLANK_ON: lambda: self.set_blanked(True),
             Action.BLANK_OFF: lambda: self.set_blanked(False),
         }
