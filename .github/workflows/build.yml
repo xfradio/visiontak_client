@@ -168,6 +168,7 @@ jobs:
           mkdir -p /tmp/images
           sh -x image/build-image.sh dist/visiontak-client_*_arm64.snap 2>&1 | tee /tmp/build.log
           cp image/out/*.img.xz /tmp/images/
+          for m in image/out/*.manifest; do [ -f "$m" ] && cp "$m" /tmp/images/visiontak_client.manifest; done
 
       # A second image with the CEC gadget bits left out. The device currently stalls
       # on "Installing Ubuntu Core", which creates neither a console nor the SSH
@@ -189,6 +190,7 @@ jobs:
           set -o pipefail
           sh -x image/build-image.sh dist/visiontak-client_*_arm64.snap 2>&1 | tee /tmp/build-nocec.log
           cp image/out/*.img.xz /tmp/images/
+          for m in image/out/*.manifest; do [ -f "$m" ] && cp "$m" /tmp/images/visiontak_client-nocec.manifest; done
           ls -la /tmp/images/
 
       - name: Diagnostics on failure
@@ -214,7 +216,9 @@ jobs:
       - uses: actions/upload-artifact@v7
         with:
           name: visiontak-pi-sdcard-image
-          path: /tmp/images/*.img.xz
+          path: |
+            /tmp/images/*.img.xz
+            /tmp/images/*.manifest
           if-no-files-found: error
 
   release:

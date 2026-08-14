@@ -443,6 +443,16 @@ sudo ubuntu-image snap "$WORK/model.assert" -O "$OUT" \
   --snap "$CLIENT_SNAP"
 sudo chown -R "$(id -u):$(id -g)" "$OUT"
 
+# Every snap in the model is tracked from a channel, not pinned to a revision, so two
+# builds of the same commit can seed different software. That makes "it used to boot
+# and now it does not" reproducible without anything in this repository changing, and
+# there is otherwise no record of what a given card actually contains. Print it, and
+# keep it next to the image so a bad build can be compared against a good one.
+echo "==> seeded revisions"
+for m in "$OUT"/seed.manifest "$OUT"/*.manifest; do
+  [ -f "$m" ] && { cat "$m"; break; }
+done || echo "    no manifest emitted" >&2
+
 echo "==> compress"
 IMG="$(find "$OUT" -maxdepth 1 -name '*.img' | head -1)"
 [ -n "$IMG" ] || { echo "ubuntu-image produced no .img" >&2; exit 1; }
