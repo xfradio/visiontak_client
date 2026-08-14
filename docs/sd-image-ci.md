@@ -104,8 +104,8 @@ Check `lsblk` first — `dd` to the wrong device takes your disk with it.
 
 Use a card of **8 GB or more**. The partition table is laid out at build time and does
 not shrink to fit: 2500M of `ubuntu-seed`, 750M of `ubuntu-boot`, 32M of `ubuntu-save`
-and 4G of `ubuntu-data` come to roughly 7.3 GB expanded. The download stays near 1 GB
-because the free space compresses away.
+and 2500M of `ubuntu-data` come to roughly 5.6 GB expanded. The download stays near
+1 GB because the free space compresses away.
 
 `ubuntu-data` is sized generously on purpose. It holds every snap installed at first
 boot — kernel, core24, mesa, `gnome-46-2404`, `gtk-common-themes`, `ubuntu-frame` and

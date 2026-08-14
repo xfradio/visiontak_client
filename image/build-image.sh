@@ -247,7 +247,11 @@ resize_partition ubuntu-seed 1200M "${SEED_SIZE:-2500M}"
 # — was already close to that, and adding the GStreamer decoders took the client from
 # 68 MB to 142 MB. Install then stops partway with "Installing Ubuntu Core" still on
 # screen and no error anywhere reachable, because there is no console yet.
-resize_partition ubuntu-data 1500M "${DATA_SIZE:-4G}"
+#
+# 2500M, not 4G: the whole layout has to fit the card, and 4G took it to ~7.3 GB,
+# which a nominal 8 GB card cannot reliably hold. That would fail partitioning for a
+# reason unrelated to the fault being chased. This still leaves ~1 GB over stock.
+resize_partition ubuntu-data 1500M "${DATA_SIZE:-2500M}"
 
 grep -n 'name:\|size:' "$WORK/pi-gadget/gadget.yaml"
 
