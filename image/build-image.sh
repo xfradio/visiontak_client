@@ -118,18 +118,30 @@ CEC_SLOT="${CEC_SLOT:-1}"
 if [ "$CEC_SLOT" = "0" ]; then
   echo "==> hdmi-cec slot SKIPPED (CEC_SLOT=0) — remote control will not work"
 elif ! grep -q '^  hdmi-cec:' "$WORK/pi-gadget/snapcraft.yaml"; then
-  awk '
+  # Both lists are generated from this one, because they must agree and nothing catches
+  # it when they do not. snapd matches each udev-tagging "kernel" tag *literally*
+  # against the basenames in `devices` — it does not expand globs — so the pairing
+  # /dev/cec0 + kernel: cec[0-9] is rejected with
+  #   invalid "kernel" tag: "cec[0-9]" does not match any specified device
+  # and snapd then drops the entire slot. The plug stays unconnected, opening
+  # /dev/cec0 fails with EPERM, and the only trace is `snap warnings` — the image
+  # builds, installs and runs while the remote is simply dead. This has now shipped
+  # broken twice, in two different ways, so the two lists no longer exist separately.
+  CEC_DEVICES="${CEC_DEVICES:-cec0 cec1}"
+  awk -v devs="$CEC_DEVICES" '
     /^slots:/ && !ins {
       print
       print "  hdmi-cec:"
       print "    interface: custom-device"
       print "    custom-device: hdmi-cec"
+      n = split(devs, d, " ")
       print "    devices:"
-      print "      - /dev/cec0"
-      print "      - /dev/cec1"
+      for (i = 1; i <= n; i++) printf "      - /dev/%s\n", d[i]
       print "    udev-tagging:"
-      print "      - kernel: cec[0-9]"
-      print "        subsystem: cec"
+      for (i = 1; i <= n; i++) {
+        printf "      - kernel: %s\n", d[i]
+        print  "        subsystem: cec"
+      }
       ins = 1
       next
     }
@@ -138,7 +150,16 @@ elif ! grep -q '^  hdmi-cec:' "$WORK/pi-gadget/snapcraft.yaml"; then
   ' "$WORK/pi-gadget/snapcraft.yaml" > "$WORK/snapcraft.yaml.slots" \
     || { echo "no slots: stanza in the gadget snapcraft.yaml to extend" >&2; exit 1; }
   mv "$WORK/snapcraft.yaml.slots" "$WORK/pi-gadget/snapcraft.yaml"
-  echo "    hdmi-cec slot declared in the gadget"
+
+  # Prove the invariant rather than trusting the generator above. snapd only reports
+  # this on the device, as a warning nobody reads, long after the image was built.
+  for dev in $CEC_DEVICES; do
+    grep -q "^      - /dev/$dev\$" "$WORK/pi-gadget/snapcraft.yaml" \
+      && grep -q "^      - kernel: $dev\$" "$WORK/pi-gadget/snapcraft.yaml" \
+      || { echo "hdmi-cec slot is inconsistent for $dev — snapd would drop it" >&2; exit 1; }
+  done
+  echo "    hdmi-cec slot declared for: $CEC_DEVICES"
+  sed -n '/^  hdmi-cec:/,/^  [a-z]/p' "$WORK/pi-gadget/snapcraft.yaml" | sed 's/^/      /'
 fi
 
 # The stock gadget sizes ubuntu-seed for Canonical's own image. This one additionally
