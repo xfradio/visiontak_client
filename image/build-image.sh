@@ -171,12 +171,18 @@ if [ "$DISPLAY_DRIVER" = "kms" ]; then
   # hdmi_group/hdmi_mode forced below it shows a picture, so it keeps CEC too.
   # PI4_DRIVER=fkms falls back to video-only if a particular panel disagrees.
   PI4_DRIVER="${PI4_DRIVER:-kms}"
-  awk -v cma="$CMA_MB" -v pi4="$PI4_DRIVER" '
+  # A Pi 4 has 2-8 GiB against the Pi 3's 1 GiB shared with the GPU, so it can afford a
+  # much larger contiguous pool. CMA is what the compositor and WebKit's accelerated
+  # layers allocate from at 1080p, and 128M is a Pi 3 figure — undersizing it there
+  # shows up as tearing and dropped frames rather than an error, so it is worth
+  # spending the memory a Pi 4 actually has.
+  PI4_CMA_MB="${PI4_CMA_MB:-256}"
+  awk -v cma="$CMA_MB" -v pi4cma="$PI4_CMA_MB" -v pi4="$PI4_DRIVER" '
     /^dtoverlay=vc4-f?kms-v3d/ {
       # Every model the gadget supports gets exactly one overlay line. No [all]
       # fallback: it would load a second overlay on top of the matched one.
-      printf "[pi4]\ndtoverlay=vc4-%s-v3d,cma-%s\n", pi4, cma
-      printf "[cm4]\ndtoverlay=vc4-%s-v3d,cma-%s\n", pi4, cma
+      printf "[pi4]\ndtoverlay=vc4-%s-v3d,cma-%s\n", pi4, pi4cma
+      printf "[cm4]\ndtoverlay=vc4-%s-v3d,cma-%s\n", pi4, pi4cma
       printf "[pi3]\ndtoverlay=vc4-kms-v3d,cma-%s\n", cma
       printf "[cm3]\ndtoverlay=vc4-kms-v3d,cma-%s\n", cma
       printf "[pi2]\ndtoverlay=vc4-fkms-v3d,cma-%s\n", cma
@@ -218,17 +224,34 @@ if [ "$DISPLAY_DRIVER" = "kms" ]; then
     echo "    pi4 HDMI forced to group=$HDMI_GROUP mode=$HDMI_MODE (1/16 = 1080p60)"
   fi
 
+  # A Pi 4B is a 1.5 GHz part that the firmware will clock to 1.8 GHz when told to.
+  # This is Raspberry Pi's own supported switch, not an overclock: no over_voltage,
+  # no custom arm_freq, and boards without the newer firmware ignore it. Scoped to
+  # pi4 because that is the only model it means anything on.
+  ARM_BOOST="${ARM_BOOST:-1}"
+  if [ "$ARM_BOOST" = "1" ] && ! grep -q 'arm_boost' "$WORK/pi-gadget/configs/config.txt"; then
+    printf '\n[pi4]\narm_boost=1\n[all]\n' >> "$WORK/pi-gadget/configs/config.txt"
+    echo "    pi4 arm_boost=1 (1.5 -> 1.8 GHz)"
+  fi
+
   echo "    full KMS (vc4-kms-v3d); vt.handoff dropped so plymouth owns the console"
 else
   echo "    fake KMS retained — /dev/cec0 will not exist and the remote will not work" >&2
+  # fkms leaves a single overlay line the per-model rewrite never produced. Confined to
+  # this branch: under KMS it would flatten the per-model CMA values back to one number,
+  # undoing the larger pool a Pi 4 is given above.
+  sed -i "s/\(dtoverlay=vc4-f\?kms-v3d\),cma-[0-9]*/\1,cma-$CMA_MB/" \
+    "$WORK/pi-gadget/configs/config.txt"
 fi
 echo "    cmdline: $(cat "$CMDLINE")"
 
-# fkms leaves a single overlay line the per-model rewrite above never touched.
-sed -i "s/\(dtoverlay=vc4-f\?kms-v3d\),cma-[0-9]*/\1,cma-$CMA_MB/" \
-  "$WORK/pi-gadget/configs/config.txt"
-echo "    CMA ${CMA_MB}M"
-grep -n 'dtoverlay=vc4\|^\[' "$WORK/pi-gadget/configs/config.txt" || true
+# The firmware waits a second before loading the kernel to let slow SD cards settle.
+# Nothing here needs it, and it is pure latency on every boot.
+grep -q '^boot_delay' "$WORK/pi-gadget/configs/config.txt" \
+  || printf '\nboot_delay=0\n' >> "$WORK/pi-gadget/configs/config.txt"
+
+echo "    CMA ${CMA_MB}M (pi4/cm4 ${PI4_CMA_MB:-$CMA_MB}M)"
+grep -n 'dtoverlay=vc4\|arm_boost\|boot_delay\|^\[' "$WORK/pi-gadget/configs/config.txt" || true
 
 # Both partitions are resized by matching the stock literal, so an upstream change to
 # the gadget would silently leave the old geometry in place and produce an image that
@@ -255,10 +278,12 @@ resize_partition ubuntu-seed 1200M "${SEED_SIZE:-2500M}"
 # 68 MB to 142 MB. Install then stops partway with "Installing Ubuntu Core" still on
 # screen and no error anywhere reachable, because there is no console yet.
 #
-# 2500M, not 4G: the whole layout has to fit the card, and 4G took it to ~7.3 GB,
-# which a nominal 8 GB card cannot reliably hold. That would fail partitioning for a
-# reason unrelated to the fault being chased. This still leaves ~1 GB over stock.
-resize_partition ubuntu-data 1500M "${DATA_SIZE:-2500M}"
+# Sized for the 16 GB card these units are built on: seed + boot + save + data comes
+# to about 11.2 GB, inside the ~14.8 GiB such a card really has. ubuntu-data does not
+# grow later — the gadget's own "XXX: make auto-grow to partition" note is still
+# unaddressed upstream — so whatever is set here is what the device lives with, and
+# snap refreshes keep old revisions around. Drop to 2500M for an 8 GB card.
+resize_partition ubuntu-data 1500M "${DATA_SIZE:-8G}"
 
 grep -n 'name:\|size:' "$WORK/pi-gadget/gadget.yaml"
 

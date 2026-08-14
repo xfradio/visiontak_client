@@ -133,6 +133,12 @@ log = logging.getLogger(__name__)
 # 1900+. Anything under this is treated as the small board.
 LOW_MEMORY_MIB = 1536
 
+# Above this, keep more dashboards resident. Set so a 2 GiB Pi 4 (about 1900 MiB
+# reported) stays on the default and only the 4 and 8 GiB boards move up — those are
+# the ones with room for several WebKit web processes at once.
+HIGH_MEMORY_MIB = 3072
+HIGH_MEMORY_LIVE_VIEWS = 6
+
 
 def _total_memory_mib() -> int | None:
     """Total RAM in MiB, or None where /proc/meminfo is not readable."""
@@ -316,6 +322,18 @@ def load(data_dir: Path | None = None, environ: dict[str, str] | None = None) ->
             total_mib,
             values["max_live_views"],
             values["hardware_acceleration"],
+        )
+    elif total_mib is not None and total_mib >= HIGH_MEMORY_MIB:
+        # An evicted dashboard is reloaded from the network on return, which is the
+        # slowest thing the kiosk does and the one a viewer actually watches. A 4 GiB
+        # Pi 4 has the headroom to keep the whole rotation resident and switch
+        # instantly; the default is held down for the 2 GiB board, which does not.
+        if "max_live_views" not in values:
+            values["max_live_views"] = HIGH_MEMORY_LIVE_VIEWS
+        log.info(
+            "%d MiB of RAM detected — keeping %s dashboards live",
+            total_mib,
+            values["max_live_views"],
         )
     # `from __future__ import annotations` turns field.type into a string, so derive the
     # target type from each field's default instead.
