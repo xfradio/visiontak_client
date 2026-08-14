@@ -158,3 +158,31 @@ def test_no_retry_once_registered(monkeypatch):
     monkeypatch.setattr(backend, "_refresh_phys_addr", lambda: called.append(1))
     assert backend._retry_claim() == []
     assert not called, "re-read the physical address while already registered"
+
+
+def test_a_failure_to_open_is_reported_not_just_logged(monkeypatch):
+    """An unopenable adapter must reach the diagnostics panel. It previously showed
+    KernelCecBackend / present for a device that had never opened."""
+    from visiontak_client.cec import CecError, CecEventKind, CecReader
+    from visiontak_client.cec.base import NullCecBackend
+
+    class Refuses(NullCecBackend):
+        def open(self):
+            raise CecError("cannot open /dev/cec0: [Errno 1] Operation not permitted")
+
+    seen = []
+    holder = {}
+
+    class StopsAfterOneAttempt(Refuses):
+        def open(self):
+            # Ask the loop to finish, so this exercises one failure and not a retry
+            # loop; the wait() after the failure then returns immediately.
+            holder["reader"]._stop.set()
+            super().open()
+
+    reader = CecReader(StopsAfterOneAttempt(), seen.append)
+    holder["reader"] = reader
+    reader._run()
+
+    assert [e.kind for e in seen] == [CecEventKind.ADAPTER_LOST]
+    assert "Operation not permitted" in seen[0].detail

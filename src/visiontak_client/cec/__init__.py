@@ -87,6 +87,13 @@ class CecReader:
                 self._backend.open()
             except CecError as exc:
                 log.warning("cec unavailable (%s); retrying in %.0fs", exc, RECONNECT_DELAY_SECONDS)
+                # Report it. create_backend() picks the kernel backend on nothing more
+                # than os.path.exists(), so a device that is present but unopenable —
+                # an unconnected hdmi-cec interface denies it with EPERM — left the
+                # diagnostics panel showing "KernelCecBackend" and "/dev/cec0 present"
+                # for an adapter that had never once opened. That reads as working CEC
+                # and sent the search a long way in the wrong direction.
+                self._emit(CecEvent(CecEventKind.ADAPTER_LOST, detail=str(exc)))
                 if self._stop.wait(RECONNECT_DELAY_SECONDS):
                     return
                 continue
@@ -103,10 +110,13 @@ class CecReader:
                 time.sleep(RECONNECT_DELAY_SECONDS)
                 return
             for event in events:
-                try:
-                    self._on_event(event)
-                except Exception:  # noqa: BLE001 - a bad handler must not kill CEC
-                    log.exception("cec event handler raised")
+                self._emit(event)
+
+    def _emit(self, event: CecEvent) -> None:
+        try:
+            self._on_event(event)
+        except Exception:  # noqa: BLE001 - a bad handler must not kill CEC
+            log.exception("cec event handler raised")
 
     def _safe_close(self) -> None:
         try:
