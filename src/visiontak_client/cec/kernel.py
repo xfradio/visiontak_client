@@ -169,7 +169,7 @@ class KernelCecBackend(CecBackend):
                 return []
             raise
         if not ready:
-            return []
+            return self._retry_claim()
 
         events: list[CecEvent] = []
         for fd, flags in ready:
@@ -180,6 +180,30 @@ class KernelCecBackend(CecBackend):
             if flags & select.POLLIN:
                 events.extend(self._drain_messages())
         return events
+
+    def _retry_claim(self) -> list[CecEvent]:
+        """Claim a logical address if we still have none.
+
+        open() claims one only when the TV has already supplied a physical address,
+        and otherwise waits for a CEC_EVENT_STATE_CHANGE to try again. A link that was
+        already up and settled before the daemon started need never produce that event,
+        which leaves the adapter open but permanently unregistered — and that state is
+        silent in both directions. _transmit() returns early, so <Set OSD Name> is never
+        sent and the TV keeps the firmware's "raspberry" label; and an unaddressable
+        follower is sent no remote keys, so the whole remote appears dead while the
+        diagnostics panel cheerfully reports KernelCecBackend and /dev/cec0 present.
+
+        Runs on poll() timeouts, so at most once every POLL_TIMEOUT_SECONDS and only
+        while unregistered.
+        """
+        if self._log_addr != u.CEC_LOG_ADDR_UNREGISTERED:
+            return []
+        if self._refresh_phys_addr() == u.CEC_PHYS_ADDR_INVALID:
+            return []
+        if not self._claim_logical_address():
+            return []
+        self.announce()
+        return [CecEvent(CecEventKind.ADAPTER_READY, detail=f"phys 0x{self._phys_addr:04x}")]
 
     def _drain_events(self) -> list[CecEvent]:
         out: list[CecEvent] = []

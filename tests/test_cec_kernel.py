@@ -120,3 +120,41 @@ def test_the_null_backend_waits_when_running():
     started = time.monotonic()
     backend.poll(0.2)
     assert time.monotonic() - started >= 0.15
+
+
+def test_a_deferred_logical_address_is_retried(monkeypatch):
+    """A link already up before the daemon started emits no state change, so the
+    adapter would otherwise sit open and unregistered forever."""
+    backend = KernelCecBackend.__new__(KernelCecBackend)
+    backend._fd = 3
+    backend._log_addr = u.CEC_LOG_ADDR_UNREGISTERED
+    backend._phys_addr = u.CEC_PHYS_ADDR_INVALID
+    backend._osd_name = b"VisionTAK"
+
+    # The TV has since supplied an address; the state-change event never arrived.
+    monkeypatch.setattr(backend, "_refresh_phys_addr", lambda: setattr_and_return(backend, 0x1000))
+    monkeypatch.setattr(backend, "_claim_logical_address", lambda: claim(backend))
+    monkeypatch.setattr(backend, "announce", lambda: None)
+
+    events = backend._retry_claim()
+    assert [e.kind for e in events] == [CecEventKind.ADAPTER_READY]
+
+
+def setattr_and_return(backend, value):
+    backend._phys_addr = value
+    return value
+
+
+def claim(backend):
+    backend._log_addr = 4
+    return True
+
+
+def test_no_retry_once_registered(monkeypatch):
+    """The retry must not re-announce on every idle poll."""
+    backend = KernelCecBackend.__new__(KernelCecBackend)
+    backend._log_addr = 4
+    called = []
+    monkeypatch.setattr(backend, "_refresh_phys_addr", lambda: called.append(1))
+    assert backend._retry_claim() == []
+    assert not called, "re-read the physical address while already registered"
