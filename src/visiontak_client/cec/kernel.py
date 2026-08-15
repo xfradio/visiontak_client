@@ -25,6 +25,34 @@ log = logging.getLogger(__name__)
 
 VENDOR_ID_UNKNOWN = 0x000000
 
+CONNECT_COMMAND = "sudo snap connect visiontak-client:hdmi-cec pi:hdmi-cec"
+
+
+def _open_hint(exc: OSError) -> str:
+    """Turn an open() failure into something the reader can act on.
+
+    EPERM and EACCES look alike and mean different things, and the difference is the
+    whole diagnosis:
+
+    * EPERM is snapd's device cgroup refusing a device the snap was never granted.
+      That is the hdmi-cec plug sitting unconnected, which is the state every freshly
+      flashed card is in — the gadget declares the slot but snapd does not act on the
+      gadget's `connections` entry, so nothing connects it. Bare "Operation not
+      permitted" sent one search after file modes and group membership, neither of
+      which has anything to do with it; the daemon runs as root and ignores both.
+    * EACCES really is file permissions, and the groups are worth looking at.
+    """
+    if exc.errno == errno.EPERM:
+        return (
+            "; the hdmi-cec plug is not connected — snapd's device cgroup is refusing"
+            f" the open. Fix with: {CONNECT_COMMAND}"
+        )
+    if exc.errno == errno.EACCES:
+        return "; check the device's mode and group — this is file permissions, not confinement"
+    if exc.errno == errno.ENOENT:
+        return "; no CEC adapter exists. Needs full KMS (vc4-kms-v3d), not fake KMS"
+    return ""
+
 
 class KernelCecBackend(CecBackend):
     def __init__(self, device: str = "/dev/cec0", osd_name: str = "VisionTAK") -> None:
@@ -44,7 +72,7 @@ class KernelCecBackend(CecBackend):
         try:
             self._fd = os.open(self._device, os.O_RDWR | os.O_NONBLOCK)
         except OSError as exc:
-            raise CecError(f"cannot open {self._device}: {exc}") from exc
+            raise CecError(f"cannot open {self._device}: {exc}{_open_hint(exc)}") from exc
         self._wake_r, self._wake_w = os.pipe()
         # Registered once rather than per poll(). This is the one loop that runs for
         # the life of the process, so rebuilding the poll object and re-registering

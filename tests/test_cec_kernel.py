@@ -207,6 +207,99 @@ def test_a_busy_adapter_registered_as_unregistered_is_not_adopted(monkeypatch):
     assert backend._log_addr == u.CEC_LOG_ADDR_UNREGISTERED
 
 
+def test_eperm_names_the_unconnected_plug_and_the_fix():
+    """EPERM is the device cgroup, not file permissions. Reporting it bare sent one
+    investigation after group membership, which cannot matter — the daemon is root."""
+    import errno
+
+    from visiontak_client.cec.kernel import CONNECT_COMMAND, _open_hint
+
+    hint = _open_hint(OSError(errno.EPERM, "Operation not permitted"))
+    assert "not connected" in hint
+    assert CONNECT_COMMAND in hint
+
+
+def test_eacces_points_at_permissions_instead():
+    import errno
+
+    from visiontak_client.cec.kernel import _open_hint
+
+    hint = _open_hint(OSError(errno.EACCES, "Permission denied"))
+    assert "file permissions" in hint
+    assert "snap connect" not in hint
+
+
+def test_a_missing_device_points_at_the_display_driver():
+    import errno
+
+    from visiontak_client.cec.kernel import _open_hint
+
+    assert "full KMS" in _open_hint(OSError(errno.ENOENT, "No such file or directory"))
+
+
+def test_a_repeated_open_failure_is_logged_once(monkeypatch, caplog):
+    """It retries every 5s for the life of the appliance. Warning on each one buried
+    every other line in the log, which is how a five-second heartbeat becomes the only
+    thing anyone can see."""
+    import logging
+
+    from visiontak_client import cec as cec_module
+    from visiontak_client.cec import CecError, CecReader
+    from visiontak_client.cec.base import NullCecBackend
+
+    monkeypatch.setattr(cec_module, "RECONNECT_DELAY_SECONDS", 0)
+    holder: dict = {}
+    attempts = []
+
+    class Refuses(NullCecBackend):
+        def open(self):
+            attempts.append(1)
+            if len(attempts) >= 3:
+                holder["reader"]._stop.set()
+            raise CecError("cannot open /dev/cec0: [Errno 1] Operation not permitted")
+
+    reader = CecReader(Refuses(), lambda _event: None)
+    holder["reader"] = reader
+    with caplog.at_level(logging.WARNING, logger="visiontak_client.cec"):
+        reader._run()
+
+    assert len(attempts) == 3, "the retry loop did not run"
+    warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
+    assert len(warnings) == 1, f"the same failure was reported {len(warnings)} times"
+
+
+def test_a_changed_open_failure_is_reported_again(monkeypatch, caplog):
+    """Quieting repeats must not quiet a *different* failure — that would hide the
+    adapter going from unconnected to genuinely broken."""
+    import logging
+
+    from visiontak_client import cec as cec_module
+    from visiontak_client.cec import CecError, CecReader
+    from visiontak_client.cec.base import NullCecBackend
+
+    monkeypatch.setattr(cec_module, "RECONNECT_DELAY_SECONDS", 0)
+    holder: dict = {}
+    reasons = ["Operation not permitted", "Operation not permitted", "No such device"]
+
+    class Refuses(NullCecBackend):
+        def open(self):
+            if not reasons:
+                holder["reader"]._stop.set()
+                raise CecError("No such device")
+            reason = reasons.pop(0)
+            if not reasons:
+                holder["reader"]._stop.set()
+            raise CecError(f"cannot open /dev/cec0: {reason}")
+
+    reader = CecReader(Refuses(), lambda _event: None)
+    holder["reader"] = reader
+    with caplog.at_level(logging.WARNING, logger="visiontak_client.cec"):
+        reader._run()
+
+    warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
+    assert len(warnings) == 2, "a changed reason was swallowed as a repeat"
+
+
 def test_a_failure_to_open_is_reported_not_just_logged(monkeypatch):
     """An unopenable adapter must reach the diagnostics panel. It previously showed
     KernelCecBackend / present for a device that had never opened."""

@@ -396,9 +396,24 @@ fi
 # `snap pack --check-skeleton` could never have caught this. It validates syntax, and
 # the omitted form is syntactically perfect — it just means something else.
 #
-# If `pi:` does not resolve, this fails exactly as the omitted form did: an
-# unresolvable gadget connection is skipped, not fatal. The current image proves it —
-# it has been seeding and booting with `system:hdmi-cec` pointing at nothing.
+# NONE OF THIS ACTUALLY CONNECTS ANYTHING. Observed on a device built from this
+# script: the entry ships verbatim in /snap/pi/current/meta/gadget.yaml, seeding
+# completes, and `snap tasks 1` contains no Connect task for hdmi-cec at all — not a
+# failed one, none. snapd drops the entry silently. Every other connection in that
+# seed produced a task, so this is specific to it.
+#
+# So the qualified `slot: pi:hdmi-cec` above is not known to work either. It is kept
+# because it is at least the correct spelling of the intent, and costs nothing if a
+# later snapd honours it. Do not read its presence as evidence that auto-connection
+# happens — it does not.
+#
+# Until that is understood, connecting the plug is a manual provisioning step:
+#
+#   sudo snap connect visiontak-client:hdmi-cec pi:hdmi-cec
+#
+# The client now says exactly that in its log when the open is refused with EPERM,
+# because this has been rediscovered from a bare "Operation not permitted" on three
+# separate cards.
 #
 # Skipped with the slot under CEC_SLOT=0: the two have to be added and removed
 # together.

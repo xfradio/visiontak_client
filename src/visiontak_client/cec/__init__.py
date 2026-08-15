@@ -66,6 +66,7 @@ class CecReader:
         self._on_event = on_event
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
+        self._last_open_error: str | None = None
 
     def start(self) -> None:
         self._stop.clear()
@@ -86,7 +87,20 @@ class CecReader:
             try:
                 self._backend.open()
             except CecError as exc:
-                log.warning("cec unavailable (%s); retrying in %.0fs", exc, RECONNECT_DELAY_SECONDS)
+                # Loud once, then quiet until the reason changes. This retries every
+                # five seconds for the life of an appliance that may run for months, so
+                # an unconditional warning buries every other line in the log — and the
+                # message that matters is the first one, which now carries the fix.
+                detail = str(exc)
+                if detail != self._last_open_error:
+                    log.warning(
+                        "cec unavailable (%s); retrying every %.0fs",
+                        detail,
+                        RECONNECT_DELAY_SECONDS,
+                    )
+                    self._last_open_error = detail
+                else:
+                    log.debug("cec still unavailable (%s)", detail)
                 # Report it. create_backend() picks the kernel backend on nothing more
                 # than os.path.exists(), so a device that is present but unopenable —
                 # an unconnected hdmi-cec interface denies it with EPERM — left the
@@ -97,6 +111,9 @@ class CecReader:
                 if self._stop.wait(RECONNECT_DELAY_SECONDS):
                     return
                 continue
+            # Cleared on success so a later failure is reported loudly again rather
+            # than being swallowed as a repeat of one from hours ago.
+            self._last_open_error = None
             self._backend.announce()
             self._pump()
 
