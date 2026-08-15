@@ -16,12 +16,24 @@ from .cec import CecEvent, CecEventKind, CecReader, create_backend
 from .cec.keymap import action_for
 from .config import Config
 from .firstrun import POLL_SECONDS, attempt_registration
-from .ui.app import idle
 
 log = logging.getLogger(__name__)
 
 FIRST_REFRESH_DELAY_SECONDS = 1.0
 AUTH_RETRY_SECONDS = 900
+
+
+def idle(callback, *args, **kwargs) -> None:
+    """Marshal onto the GTK main loop, importing it only when first needed.
+
+    Imported lazily so this module can be exercised without GTK. Pulling ui.app in at
+    import time made `gi` a hard requirement of the controller, which meant no part of
+    the enrolment or refresh logic could be tested at all — the environment that runs
+    the suite has no gi, so the file was simply never imported.
+    """
+    from .ui.app import idle as _idle
+
+    _idle(callback, *args, **kwargs)
 
 
 class KioskController:
@@ -59,14 +71,29 @@ class KioskController:
         """
         self._config = dataclasses.replace(self._config, server_url=url)
         self._client = VisionTakClient(self._config)
+        self._publish_config()
         idle(self._window.setup_status, "Registering with the server…")
         threading.Thread(
             target=self._register_from_setup, name="setup-register", daemon=True
         ).start()
 
+    def _publish_config(self) -> None:
+        """Hand the current config to the window.
+
+        The window captures a config at construction and the controller replaces its
+        own twice after that — once with the address typed on the setup screen, once
+        with the token the server issues. Nothing carried those across, so the window
+        kept the original: the diagnostics panel reported "Server (unset)" on a device
+        that was already showing dashboards, and the address lookup picked a route
+        without knowing where the server was.
+        """
+        if self._window is not None:
+            idle(self._window.set_config, self._config)
+
     def _register_from_setup(self) -> None:
         result, config = attempt_registration(self._config)
         self._config = config
+        self._publish_config()
 
         if result is None:
             # The address saved, but nothing answered. Stay on setup so the address
@@ -110,6 +137,7 @@ class KioskController:
             return
         result, config = attempt_registration(self._config)
         self._config = config
+        self._publish_config()
 
         if result is not None and result.approved and config.api_token:
             log.info("approved — reloading with the issued token")

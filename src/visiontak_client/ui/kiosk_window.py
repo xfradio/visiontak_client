@@ -106,6 +106,16 @@ class KioskWindow(Gtk.ApplicationWindow):
             return self._dashboards[self._current]
         return None
 
+    def set_config(self, config: Config) -> None:
+        """Adopt a config the controller has replaced since construction."""
+        self._config = config
+        if config.server_url:
+            self._allowlist.allow(config.server_url)
+        # The route to the server decides which interface's address is worth printing,
+        # and the server has just changed.
+        self._ip_cache = ("", 0.0)
+        self._update_info()
+
     def set_enrolment_status(self, message: str) -> None:
         """Replace the placeholder's caption while awaiting approval.
 
