@@ -48,6 +48,10 @@ displays running **Ubuntu Core**.
 | `assets/` | Brand artwork: kiosk splash, loading overlay, source for the boot splash |
 | `docs/` | Image build, CEC details, API contract |
 
+Start with [`docs/architecture.md`](docs/architecture.md): the whole appliance in one
+place — requirements, behaviour, configuration, the image, what is currently broken,
+and what a second attempt should do differently.
+
 ## Build and deploy
 
 ```bash
