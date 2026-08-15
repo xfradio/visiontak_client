@@ -34,6 +34,14 @@ TOAST_TIMEOUT_SECONDS = 4
 _SPLASH_LOGO_PX = 320
 _IP_CACHE_SECONDS = 30
 
+# How long the loading splash stays up once it has appeared, even if the dashboard
+# paints sooner. The cover was purely functional — hide a half-drawn webview — so it
+# was torn down the instant WebKit said FINISHED. On a Pi 4 against a warm server that
+# is a couple of hundred milliseconds: too fast to read as anything but a flicker, and
+# the appliance appeared to boot with no branding at all. Holding it briefly is the
+# difference between a glitch and a product showing its name.
+_SPLASH_MIN_SECONDS = 2.0
+
 
 class KioskWindow(Gtk.ApplicationWindow):
     def __init__(self, application: Gtk.Application, config: Config) -> None:
@@ -80,6 +88,8 @@ class KioskWindow(Gtk.ApplicationWindow):
         self._loading, _ = _build_splash("Connecting…")
         self._loading.set_visible(False)
         self._loading_ids: set[str] = set()
+        self._loading_shown_at = 0.0
+        self._loading_hide_id: int | None = None
 
         overlay = Gtk.Overlay()
         overlay.set_child(self._stack)
@@ -273,7 +283,39 @@ class KioskWindow(Gtk.ApplicationWindow):
     def _sync_loading(self) -> None:
         dashboard = self.current_dashboard
         showing = dashboard is not None and dashboard.id in self._loading_ids
-        self._loading.set_visible(showing)
+        if showing:
+            self._cancel_pending_hide()
+            if not self._loading.get_visible():
+                self._loading_shown_at = monotonic()
+                self._loading.set_visible(True)
+            return
+        self._hide_loading_once_seen()
+
+    def _hide_loading_once_seen(self) -> None:
+        """Take the cover down, but not before it has been up long enough to read."""
+        if not self._loading.get_visible() or self._loading_hide_id is not None:
+            return
+        remaining = _SPLASH_MIN_SECONDS - (monotonic() - self._loading_shown_at)
+        if remaining <= 0:
+            self._loading.set_visible(False)
+            return
+        self._loading_hide_id = GLib.timeout_add(int(remaining * 1000), self._hide_loading_now)
+
+    def _hide_loading_now(self) -> bool:
+        self._loading_hide_id = None
+        # Re-check rather than hiding unconditionally: a switch or a reload during the
+        # hold puts a different dashboard behind the cover, and that one may still be
+        # loading. Hiding here regardless would expose a half-drawn webview — the exact
+        # thing the cover exists to prevent.
+        dashboard = self.current_dashboard
+        if dashboard is None or dashboard.id not in self._loading_ids:
+            self._loading.set_visible(False)
+        return GLib.SOURCE_REMOVE
+
+    def _cancel_pending_hide(self) -> None:
+        if self._loading_hide_id is not None:
+            GLib.source_remove(self._loading_hide_id)
+            self._loading_hide_id = None
 
     def _on_load_failed(self, _view, _event, uri: str, error) -> bool:
         log.warning("failed to load %s: %s", uri, getattr(error, "message", error))
