@@ -110,10 +110,46 @@ class KernelCecBackend(CecBackend):
         try:
             self._ioctl(u.CEC_ADAP_S_LOG_ADDRS, addrs)
         except OSError as exc:
+            if exc.errno == errno.EBUSY and self._adopt_log_addrs():
+                return True
             log.warning("could not claim a logical address: %s", exc)
             return False
         self._log_addr = addrs.log_addr[0]
         log.info("claimed CEC logical address %d (phys 0x%04x)", self._log_addr, self._phys_addr)
+        return True
+
+    def _adopt_log_addrs(self) -> bool:
+        """Take over a configuration the adapter already carries.
+
+        S_LOG_ADDRS answers EBUSY when the adapter is *already* configured — the
+        logical-address configuration belongs to the adapter, not to the file handle
+        that set it, so it outlives close(). Our own first claim therefore poisons
+        every later one: reopening gets a fresh handle, asks for one logical address,
+        and is refused for as long as the adapter stays configured.
+
+        That refusal used to be treated as "not yet, try again", which is right for a
+        link that has not settled and wrong here — nothing ever clears it. The client
+        then held an open, working adapter while _log_addr stayed UNREGISTERED, and an
+        unregistered follower neither transmits nor is sent remote keys. The remote is
+        dead, the diagnostics panel says KernelCecBackend, and the log repeats one
+        warning every five seconds forever.
+
+        Reconfiguring would mean unconfiguring first (num_log_addrs = 0), which drops
+        us off the bus and re-runs address negotiation to arrive back where we already
+        are. Reading the existing configuration is enough.
+        """
+        addrs = u.CecLogAddrs()
+        try:
+            self._ioctl(u.CEC_ADAP_G_LOG_ADDRS, addrs)
+        except OSError as exc:
+            log.warning("adapter is busy and its configuration is unreadable: %s", exc)
+            return False
+        if not addrs.num_log_addrs or addrs.log_addr[0] == u.CEC_LOG_ADDR_UNREGISTERED:
+            log.warning("adapter is busy but configured with no usable logical address")
+            return False
+        self._log_addr = addrs.log_addr[0]
+        log.info("adopted CEC logical address %d already configured on %s (phys 0x%04x)",
+                 self._log_addr, self._device, self._phys_addr)
         return True
 
     # -- transmit ----------------------------------------------------------

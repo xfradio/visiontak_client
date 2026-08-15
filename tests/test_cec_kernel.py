@@ -160,6 +160,53 @@ def test_no_retry_once_registered(monkeypatch):
     assert not called, "re-read the physical address while already registered"
 
 
+def busy_backend(monkeypatch, existing):
+    """A backend whose S_LOG_ADDRS is refused with EBUSY, with `existing` as whatever
+    G_LOG_ADDRS then reports the adapter is already configured with."""
+    import errno
+
+    backend = KernelCecBackend.__new__(KernelCecBackend)
+    backend._device = "/dev/cec0"
+    backend._fd = 3
+    backend._osd_name = b"VisionTAK"
+    backend._log_addr = u.CEC_LOG_ADDR_UNREGISTERED
+    backend._phys_addr = 0x1000
+
+    def fake_ioctl(request, payload):
+        if request == u.CEC_ADAP_S_LOG_ADDRS:
+            raise OSError(errno.EBUSY, "Device or resource busy")
+        assert request == u.CEC_ADAP_G_LOG_ADDRS
+        payload.num_log_addrs = existing[0]
+        payload.log_addr[0] = existing[1]
+        return payload
+
+    monkeypatch.setattr(backend, "_ioctl", fake_ioctl)
+    return backend
+
+
+def test_a_busy_adapter_adopts_the_address_it_already_has(monkeypatch):
+    """The logical-address config outlives the file handle that set it, so our own
+    first claim makes every later one EBUSY. Treating that as "try again later" left
+    the client unregistered forever on an adapter that was working."""
+    backend = busy_backend(monkeypatch, existing=(1, 4))
+    assert backend._claim_logical_address() is True
+    assert backend._log_addr == 4
+
+
+def test_a_busy_adapter_with_no_configuration_is_not_adopted(monkeypatch):
+    backend = busy_backend(monkeypatch, existing=(0, u.CEC_LOG_ADDR_UNREGISTERED))
+    assert backend._claim_logical_address() is False
+    assert backend._log_addr == u.CEC_LOG_ADDR_UNREGISTERED
+
+
+def test_a_busy_adapter_registered_as_unregistered_is_not_adopted(monkeypatch):
+    """num_log_addrs is set but the negotiation landed nowhere — adopting 15 would
+    make _transmit believe it had an address and send from the broadcast one."""
+    backend = busy_backend(monkeypatch, existing=(1, u.CEC_LOG_ADDR_UNREGISTERED))
+    assert backend._claim_logical_address() is False
+    assert backend._log_addr == u.CEC_LOG_ADDR_UNREGISTERED
+
+
 def test_a_failure_to_open_is_reported_not_just_logged(monkeypatch):
     """An unopenable adapter must reach the diagnostics panel. It previously showed
     KernelCecBackend / present for a device that had never opened."""
