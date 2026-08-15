@@ -94,7 +94,13 @@ class _CecEventUnion(ctypes.Union):
     _fields_ = [
         ("state_change", CecEventStateChange),
         ("lost_msgs", ctypes.c_uint32),
-        ("raw", ctypes.c_uint8 * 80),
+        # 64, not 80. The pad is the same width as v4l2_event.data[64], which is
+        # presumably where 80 came from. It made sizeof(cec_event) 96 instead of 80,
+        # so CEC_DQEVENT encoded as 0xc0606107 and the driver's switch matched no
+        # case at all: every dequeue failed with ENOTTY. That killed the read loop
+        # roughly a millisecond after each open, and the reader reopened on a 5s
+        # cycle forever. Measured against a running Pi 4 (vc4_hdmi), not transcribed.
+        ("raw", ctypes.c_uint8 * 64),
     ]
 
 
@@ -119,9 +125,19 @@ CEC_DQEVENT = _ioc(_IOC_READ | _IOC_WRITE, "a", 7, ctypes.sizeof(CecEventRaw))
 CEC_G_MODE = _ioc(_IOC_READ, "a", 8, ctypes.sizeof(ctypes.c_uint32))
 CEC_S_MODE = _ioc(_IOC_WRITE, "a", 9, ctypes.sizeof(ctypes.c_uint32))
 
-# Adapter capabilities
-CEC_CAP_LOG_ADDRS = 0x00000004
-CEC_CAP_TRANSMIT = 0x00000008
+# Adapter capabilities. These were each one bit too high, so CEC_CAP_LOG_ADDRS read
+# the TRANSMIT bit and CEC_CAP_TRANSMIT read PASSTHROUGH. The vc4 adapter happens to
+# set all three, so the open() guard passed anyway and the mistake stayed invisible on
+# the only hardware it runs on. Pinned by a test now.
+CEC_CAP_PHYS_ADDR = 0x00000001
+CEC_CAP_LOG_ADDRS = 0x00000002
+CEC_CAP_TRANSMIT = 0x00000004
+CEC_CAP_PASSTHROUGH = 0x00000008
+CEC_CAP_RC = 0x00000010
+CEC_CAP_MONITOR_ALL = 0x00000020
+CEC_CAP_NEEDS_HPD = 0x00000040
+CEC_CAP_MONITOR_PIN = 0x00000080
+CEC_CAP_CONNECTOR_INFO = 0x00000100
 
 # Modes
 CEC_MODE_INITIATOR = 0x01
