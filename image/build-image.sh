@@ -215,15 +215,45 @@ if [ "$DISPLAY_DRIVER" = "kms" ]; then
   mv "$WORK/config.txt.new" "$WORK/pi-gadget/configs/config.txt"
   echo "    pi4/cm4 -> $PI4_DRIVER, pi3/cm3 -> kms (CEC), pi2 -> fkms"
 
-  # vt.handoff=2 defers the console to a firmware framebuffer, which full KMS never
-  # creates — the handoff has no owner and the text console stays on screen instead
-  # of the splash. It belongs with fake KMS, so it moves with it.
+  # vt.handoff=2 hands the console to a firmware framebuffer that full KMS never
+  # creates, so it is dropped along with fake KMS.
+  #
+  # That was once believed to be why the boot splash disappeared under full KMS. It is
+  # not. Plymouth lives in the pi-kernel snap's initramfs and needs a DRM device at the
+  # moment it starts; under full KMS that device comes from vc4, which is not in the
+  # initramfs, so plymouth never takes the display and the text console is simply what
+  # remains on screen. Confirmed on a Pi 4: the symptom is the raw console, not
+  # Ubuntu's own logo — a plymouth that was running but could not find our artwork
+  # would show the latter. Removing vt.handoff changed nothing, because the handoff
+  # was never the cause.
+  #
+  # The kernel snap is upstream of this build, so full KMS and a plymouth splash
+  # cannot both be had from here. CEC is the whole point of the appliance and full KMS
+  # is the only way /dev/cec0 exists, so the splash is what gives way. What is worth
+  # fixing is the *text*: a wall display scrolling kernel messages reads as a broken
+  # computer, where a black screen reads as a device starting up. The branding then
+  # arrives with the kiosk's own splash, which is held long enough to be seen.
   sed -i 's/ *vt\.handoff=2//' "$CMDLINE"
 
+  # Move the kernel console off tty1 so nothing paints the VT the panel is showing.
+  # tty3 rather than dropping it: the messages stay reachable on a keyboard, which is
+  # the only way to read them on a device whose console is a television.
+  sed -i 's/console=tty1/console=tty3/' "$CMDLINE"
+
+  # quiet still lets warnings and errors through; loglevel=0 silences those too, and
+  # global_cursor_default=0 removes the blinking block that is otherwise the only
+  # thing on an empty screen.
+  for param in loglevel=0 vt.global_cursor_default=0; do
+    grep -q "$param" "$CMDLINE" || sed -i "s/\$/ $param/" "$CMDLINE"
+  done
+
   # Two console= entries are listed, one of them serial. Without this plymouth can
-  # take the serial console for its output and draw nothing on HDMI.
+  # take the serial console for its output and draw nothing on HDMI. Kept for the day
+  # the kernel snap ships vc4 in its initramfs and the splash becomes possible again.
   grep -q 'plymouth.ignore-serial-consoles' "$CMDLINE" \
     || sed -i 's/$/ plymouth.ignore-serial-consoles/' "$CMDLINE"
+
+  echo "    silent boot: console -> tty3, loglevel=0, no cursor (plymouth cannot run)"
 
   # Full KMS relies on the kernel negotiating a mode, where fake KMS inherited whatever
   # the firmware had already set up. On a Pi 4 that negotiation produced no picture at

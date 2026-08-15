@@ -16,6 +16,11 @@ Ubuntu Core 22 and later render a splash with Plymouth. You do **not** need to a
 Plymouth theme or rebuild the kernel snap: dropping a PNG into the gadget is enough.
 The Pi gadget already enables the splash, so this is the only change needed.
 
+> **This layer does not work on the images this repo builds.** They use full KMS for
+> CEC, and Plymouth cannot start under it — see
+> [the splash and CEC cannot both work](#the-splash-and-cec-cannot-both-work--cec-wins)
+> at the end. The rest of this section applies to a `DISPLAY_DRIVER=fkms` build.
+
 Put the image at the root of the gadget snap:
 
 ```
@@ -85,27 +90,50 @@ Ship a square master of at least 512×512 in `assets/`. Do not ship a 4K PNG and
 scaling — a Cortex-A53 decodes it on every splash, and the Pi 3's framebuffer tops out
 at 1920×1080.
 
-## The splash and CEC pull against each other
+## The splash and CEC cannot both work — CEC wins
+
+**Under full KMS there is no plymouth splash, and this build cannot give you one.**
+Layer 1 above therefore only applies to a fake-KMS image.
 
 CEC needs full KMS: under fake KMS the firmware owns the display and Linux registers
 no CEC adapter, so `/dev/cec0` never exists. Switching to `vc4-kms-v3d` for that
-reason cost the boot splash on the first attempt — the screen showed the text console
-instead.
+reason cost the boot splash, and the screen showed the text console instead.
 
-The cause is `vt.handoff=2` in the gadget's `cmdline.txt`. It defers the console to a
-firmware framebuffer, which full KMS never creates, so the handoff has no owner and
-plymouth never takes the screen. It belongs with fake KMS, so the build now removes it
-whenever it selects full KMS, and adds `plymouth.ignore-serial-consoles` because the
-command line lists a serial console that plymouth may otherwise claim.
+That was first blamed on `vt.handoff=2` in the gadget's `cmdline.txt`, on the reasoning
+that it defers the console to a firmware framebuffer full KMS never creates. The build
+removed it. **That was wrong** — removing it changed nothing, because the handoff was
+never the cause.
 
-If the splash still does not appear under full KMS, the remaining suspect is the
-initramfs: plymouth needs a DRM device at the moment it starts, and the vc4 module
-comes from the kernel snap, which this build does not control. In that case the choice
-is explicit:
+The actual cause: plymouth lives in the **pi-kernel snap's initramfs** and needs a DRM
+device at the moment it starts. Under full KMS that device comes from `vc4`, which is
+not in the initramfs, so plymouth never takes the display at all.
+
+The distinguishing symptom is worth knowing, because it tells you which problem you
+have without any further digging:
+
+| On screen at boot | Means |
+|---|---|
+| Raw text console | Plymouth never started — no DRM device. This is full KMS. |
+| Ubuntu's own logo | Plymouth is running but did not find `splash/vendor-logo.png`. |
+| VisionTAK hexagon | Working. |
+
+The kernel snap is upstream of this build, so the two cannot be reconciled here. CEC is
+the entire point of the appliance, so the splash gives way. What the build does instead
+is make the failure quiet rather than ugly — a wall display scrolling kernel messages
+reads as a broken computer, where black reads as a device starting up:
+
+- `console=tty1` → `console=tty3`, so nothing paints the VT the panel is showing
+- `loglevel=0`, because `quiet` still lets warnings and errors through
+- `vt.global_cursor_default=0`, or a blinking block is the only thing on screen
+
+The boot is then black until Ubuntu Frame comes up, and the branding arrives with the
+client's own splash, which is held for `_SPLASH_MIN_SECONDS` so it is actually seen.
+
+If you would rather have the boot splash than the remote, the trade is explicit:
 
 ```sh
-DISPLAY_DRIVER=fkms image/build-image.sh …   # splash back, no CEC
+DISPLAY_DRIVER=fkms image/build-image.sh …   # splash back, no CEC, dead remote
 ```
 
 The client's own logo splash is unaffected either way — it renders under Ubuntu Frame,
-long after the firmware handoff.
+long after any of this.
