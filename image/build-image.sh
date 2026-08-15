@@ -380,18 +380,34 @@ fi
 # snap-declaration or this. Without it the plug sits unconnected, /dev/cec0 is
 # unreachable and the client falls back to NullCecBackend.
 #
-# The slot reference is deliberately omitted — snapd reads that as the gadget's own
-# slot of the same name. Naming it fails to parse ("expected (<snap-id>|system):name")
-# and a locally built gadget has no snap-id to give.
+# Both halves are qualified with a snap name. The slot used to be omitted entirely,
+# on the reasoning that a bare `slot: hdmi-cec` fails to parse ("expected
+# (<snap-id>|system):name") and a locally built gadget has no snap-id to qualify it
+# with. The first half is true; the conclusion is not. An omitted slot does not mean
+# "the gadget's own slot of the same name" — snapd defaults it to `system:<plug-name>`,
+# so this asked for a connection to a system slot named hdmi-cec, which does not exist.
+# It resolved to nothing, silently, and the plug stayed unconnected on every image.
 #
-# Skipped with the slot under CEC_SLOT=0: an auto-connection naming a plug whose slot
-# does not exist is exactly the kind of thing that fails seeding, and the two have to
-# be added and removed together.
+# The line above it disproves the reasoning: `visiontak-client` sits in the snap-id
+# position and that snap is unasserted too, with no snap-id. It works because snapd
+# falls back to treating an unresolvable snap-id as a snap *name*. `pi` resolves the
+# same way. What was actually wrong was the missing prefix, not the naming.
+#
+# `snap pack --check-skeleton` could never have caught this. It validates syntax, and
+# the omitted form is syntactically perfect — it just means something else.
+#
+# If `pi:` does not resolve, this fails exactly as the omitted form did: an
+# unresolvable gadget connection is skipped, not fatal. The current image proves it —
+# it has been seeding and booting with `system:hdmi-cec` pointing at nothing.
+#
+# Skipped with the slot under CEC_SLOT=0: the two have to be added and removed
+# together.
 if [ "$CEC_SLOT" != "0" ] && ! grep -q '^connections:' "$WORK/pi-gadget/gadget.yaml"; then
   cat >> "$WORK/pi-gadget/gadget.yaml" <<'EOF'
 
 connections:
   - plug: visiontak-client:hdmi-cec
+    slot: pi:hdmi-cec
 EOF
 fi
 

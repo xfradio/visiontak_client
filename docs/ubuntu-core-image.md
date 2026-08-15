@@ -113,6 +113,26 @@ snap connections visiontak-client
 sudo snap connect visiontak-client:hdmi-cec pi:hdmi-cec   # if not auto-connected
 ```
 
+`hdmi-cec` should read `pi:hdmi-cec` with no `manual` note. If it shows `manual`, the
+gadget's auto-connection did not fire and someone connected it by hand — which does not
+survive a reflash, so the next card comes up with a dead remote.
+
+Both halves of that connection in `gadget.yaml` must be qualified with a snap name:
+
+```yaml
+connections:
+  - plug: visiontak-client:hdmi-cec
+    slot: pi:hdmi-cec
+```
+
+Omitting `slot:` is **not** the same as naming the gadget's own slot. snapd defaults it
+to `system:<plug-name>`, which does not exist, so the entry resolves to nothing —
+silently, with no warning and no seeding failure. That shipped on every image for
+weeks. A bare `slot: hdmi-cec` is a parse error and at least fails loudly; the omitted
+form is the dangerous one. Neither snap is asserted, so the names in the snap-id
+position work only because snapd falls back to treating an unresolvable snap-id as a
+snap name.
+
 `x11`, `desktop-legacy`, `desktop` and `gsettings` **do** appear in that list: the
 `gnome` extension declares them on every app it wraps and a snap cannot subtract them.
 What matters is that they are *unconnected* — Ubuntu Core provides no slot for them, so
