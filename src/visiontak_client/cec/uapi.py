@@ -154,6 +154,10 @@ CEC_EVENT_PIN_HPD_HIGH = 6
 CEC_LOG_ADDR_TV = 0
 CEC_LOG_ADDR_UNREGISTERED = 15
 CEC_LOG_ADDR_BROADCAST = 15
+# What the kernel puts in cec_log_addrs.log_addr[] for a slot that has no address —
+# not the same thing as UNREGISTERED, which is a real address a device transmits from.
+# It does not fit in the four bits of a message header, so it must never reach one.
+CEC_LOG_ADDR_INVALID = 0xFF
 CEC_LOG_ADDR_TYPE_PLAYBACK = 4
 CEC_OP_PRIM_DEVTYPE_PLAYBACK = 4
 CEC_OP_ALL_DEVTYPE_PLAYBACK = 0x08

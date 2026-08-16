@@ -54,6 +54,28 @@ def _open_hint(exc: OSError) -> str:
     return ""
 
 
+def _usable_log_addr(reported: int) -> int:
+    """Normalise a logical address the kernel reported into one we can transmit from.
+
+    log_addr[] is a u8 and carries 0xff (CEC_LOG_ADDR_INVALID) for a slot with no
+    address — which happens while configuration is still in flight, so it is reported
+    by a perfectly healthy adapter. 0xff is not 15: it does not fit in the four bits a
+    message header gives the initiator, and it is not a value any code that compares
+    against UNREGISTERED will catch.
+
+    Left alone it reached `bytes([(0xff << 4) | destination, opcode])`, which raises
+    ValueError rather than OSError, so it went past every handler and killed the CEC
+    thread on the first announce — a dead remote on an adapter that had just opened
+    cleanly, with a traceback as the only symptom.
+
+    Anything outside the addressable range therefore becomes UNREGISTERED, which the
+    rest of the backend already understands as "no address yet, keep trying".
+    """
+    if 0 <= reported < u.CEC_LOG_ADDR_UNREGISTERED:
+        return reported
+    return u.CEC_LOG_ADDR_UNREGISTERED
+
+
 class KernelCecBackend(CecBackend):
     def __init__(self, device: str = "/dev/cec0", osd_name: str = "VisionTAK") -> None:
         self._device = device
@@ -142,7 +164,13 @@ class KernelCecBackend(CecBackend):
                 return True
             log.warning("could not claim a logical address: %s", exc)
             return False
-        self._log_addr = addrs.log_addr[0]
+        self._log_addr = _usable_log_addr(addrs.log_addr[0])
+        if self._log_addr == u.CEC_LOG_ADDR_UNREGISTERED:
+            # S_LOG_ADDRS succeeded but negotiation has not landed on an address yet.
+            # Reported as a failure so the caller retries rather than announcing from
+            # an address that does not exist.
+            log.info("logical address not settled yet (kernel reports 0x%02x)", addrs.log_addr[0])
+            return False
         log.info("claimed CEC logical address %d (phys 0x%04x)", self._log_addr, self._phys_addr)
         return True
 
@@ -172,10 +200,15 @@ class KernelCecBackend(CecBackend):
         except OSError as exc:
             log.warning("adapter is busy and its configuration is unreadable: %s", exc)
             return False
-        if not addrs.num_log_addrs or addrs.log_addr[0] == u.CEC_LOG_ADDR_UNREGISTERED:
-            log.warning("adapter is busy but configured with no usable logical address")
+        # 0xff (INVALID) is as unusable as 15 (UNREGISTERED) and was not caught here:
+        # it passed this check, was adopted as an address, and then could not be put in
+        # a header. _usable_log_addr collapses both into UNREGISTERED.
+        if not addrs.num_log_addrs \
+                or _usable_log_addr(addrs.log_addr[0]) == u.CEC_LOG_ADDR_UNREGISTERED:
+            log.warning("adapter is busy but configured with no usable logical address"
+                        " (kernel reports 0x%02x)", addrs.log_addr[0])
             return False
-        self._log_addr = addrs.log_addr[0]
+        self._log_addr = _usable_log_addr(addrs.log_addr[0])
         log.info("adopted CEC logical address %d already configured on %s (phys 0x%04x)",
                  self._log_addr, self._device, self._phys_addr)
         return True
@@ -183,7 +216,11 @@ class KernelCecBackend(CecBackend):
     # -- transmit ----------------------------------------------------------
 
     def _transmit(self, destination: int, opcode: int, operands: bytes = b"") -> None:
-        if self._log_addr == u.CEC_LOG_ADDR_UNREGISTERED:
+        # >= rather than ==, so anything unaddressable is refused here even if it got
+        # past the two places that normalise it. The header has four bits for the
+        # initiator; a wider value raises out of bytes() and takes the CEC thread with
+        # it, which is a dead remote rather than a missed message.
+        if self._log_addr >= u.CEC_LOG_ADDR_UNREGISTERED:
             log.debug("not transmitting 0x%02x: no logical address", opcode)
             return
         msg = u.CecMsg()

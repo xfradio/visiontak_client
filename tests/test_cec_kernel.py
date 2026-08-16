@@ -207,6 +207,30 @@ def test_a_busy_adapter_registered_as_unregistered_is_not_adopted(monkeypatch):
     assert backend._log_addr == u.CEC_LOG_ADDR_UNREGISTERED
 
 
+def test_a_busy_adapter_reporting_an_invalid_address_is_not_adopted(monkeypatch):
+    """0xff is what the kernel reports for a slot with no address, and it is not 15.
+    It passed the UNREGISTERED check, was adopted, and then could not fit in the four
+    header bits — bytes() raised ValueError, which is not OSError, so it went past
+    every handler and killed the CEC thread on the first announce."""
+    backend = busy_backend(monkeypatch, existing=(1, u.CEC_LOG_ADDR_INVALID))
+    assert backend._claim_logical_address() is False
+    assert backend._log_addr == u.CEC_LOG_ADDR_UNREGISTERED
+
+
+def test_transmit_refuses_an_unaddressable_initiator(monkeypatch):
+    """The last line of defence: whatever put it there, an address that cannot go in a
+    header must not be built into one."""
+    backend = KernelCecBackend.__new__(KernelCecBackend)
+    backend._fd = 3
+    backend._log_addr = u.CEC_LOG_ADDR_INVALID
+    sent = []
+    monkeypatch.setattr(backend, "_ioctl", lambda request, payload: sent.append(payload))
+
+    backend._transmit(u.CEC_LOG_ADDR_TV, u.CEC_MSG_IMAGE_VIEW_ON)
+
+    assert sent == [], "transmitted from an address that does not fit a header"
+
+
 def test_eperm_names_the_unconnected_plug_and_the_fix():
     """EPERM is the device cgroup, not file permissions. Reporting it bare sent one
     investigation after group membership, which cannot matter — the daemon is root."""
