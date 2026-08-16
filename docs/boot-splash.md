@@ -122,17 +122,25 @@ the entire point of the appliance, so the splash gives way. What the build does 
 is make the failure quiet rather than ugly — a wall display scrolling kernel messages
 reads as a broken computer, where black reads as a device starting up:
 
-- `console=tty1` → `console=tty3`, which is where the messages belong
-- `loglevel=0`, because `quiet` still lets warnings and errors through
-- `vt.global_cursor_default=0`, or a blinking block is the only thing on screen
-- `systemd.show_status=false`, which is the one that empties the screen
+- `console=tty1` **removed**, leaving `console=serial0,115200` as the only console
+- `systemd.show_status=false`, which no printk setting substitutes for
+- `systemd.mask=getty@tty1.service`, `systemd.mask=console-conf@tty1.service`
+- `systemd.wants=getty@tty2.service`, so the keyboard login survives on Alt-F2
+- `loglevel=0` and `vt.global_cursor_default=0`, kept as belt and braces
 
-Moving the console to tty3 does **not** move it off the panel, and believing it did
-cost a card. The kernel makes the last `console=ttyN` the foreground VT, so the panel
-shows tty3 instead of tty1 and the text is exactly as visible as before. Nor do `quiet`
-and `loglevel=0` reach it: `[ OK ] Started …` and the first-boot install progress are
-written by systemd to `/dev/console` directly rather than through printk, so they
-survive every printk-level setting. `systemd.show_status=false` is what silences them.
+Two earlier attempts at this did not work, and the reasons are worth keeping.
+
+*Moving* the console to another VT does not take it off the panel — `console=tty3`
+leaves the text exactly as visible, on VT3 instead of VT1. A VT gets written to because
+`console=` enables it, so the fix is to enable no VT at all: with `serial0` the only
+`console=` entry, printk has nowhere on the panel to go and `/dev/console` is the serial
+port.
+
+And no printk setting reaches systemd. `[ OK ] Started …` and the install progress go
+to `/dev/console` directly, so they survive `quiet` and `loglevel=0` both —
+`systemd.show_status=false` is what silences those. `loglevel=0` also did not suppress
+kernel warnings on a card whose `/proc/cmdline` carried it, which is the other reason
+not to rest a wall display on log levels.
 
 The other half is what is *running* on that VT, which no kernel parameter touches:
 
@@ -148,18 +156,13 @@ something drawing on them: `console-conf@tty3` on the console VT, `getty@tty1` o
 those; it skips the setup wizard and leaves a login prompt on the console VT, which is
 text on a television for as long as boot takes.
 
-Which of the two is actually in front depends on whether the kernel moves the display
-along with `console=tty3`, so `image/gadget-cloud.conf` clears both rather than betting
-on it: `console-conf@tty1`, `console-conf@tty3`, `getty@tty1` and `getty@tty3` are all
-masked on first boot.
+Both are masked from the kernel command line, which `systemd-debug-generator` honours
+from the first boot — there is no window in which the prompt appears. Masking them from
+cloud-init was tried first and is worse: `runcmd` does not run until cloud-final, by
+which point the boot the viewer was watching is over.
 
-The keyboard login is moved, not given up — the same file enables `getty@tty2`, on a VT
-nothing displays. **Alt-F2** on a unit whose network is down.
-
-Because the masking is done by cloud-init rather than baked into the image, the very
-first boot still shows the prompt until cloud-final runs. Every boot after that is
-black. Baking it in would need a writable rootfs at build time, which a UC24 image does
-not have.
+The keyboard login is moved, not given up: `systemd.wants=getty@tty2.service` puts it on
+a VT nothing displays. **Alt-F2** on a unit whose network is down.
 
 The boot is then black until Ubuntu Frame comes up, and the branding arrives with the
 client's own splash, which is held for `_SPLASH_MIN_SECONDS` so it is actually seen.

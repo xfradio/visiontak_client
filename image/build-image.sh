@@ -259,25 +259,39 @@ if [ "$DISPLAY_DRIVER" = "kms" ]; then
   # arrives with the kiosk's own splash, which is held long enough to be seen.
   sed -i 's/ *vt\.handoff=2//' "$CMDLINE"
 
-  # Move the kernel console off tty1. This does not move it off *screen*: the kernel
-  # makes the last console=ttyN the foreground VT, so the panel then shows tty3
-  # instead of tty1 and the text is exactly as visible as it was. Observed on a Pi 4
-  # with this cmdline already in place. tty3 is kept anyway because it is where the
-  # messages should live, and because /dev/console following it is what the next two
-  # settings depend on — but silencing is what actually clears the screen.
-  sed -i 's/console=tty1/console=tty3/' "$CMDLINE"
-
-  # quiet still lets warnings and errors through; loglevel=0 silences those too, and
-  # global_cursor_default=0 removes the blinking block that is otherwise the only
-  # thing on an empty screen.
+  # Drop the VT console entirely rather than moving it to another VT. Moving it was
+  # tried twice and neither attempt cleared the screen: console=tty3 does not take the
+  # messages off the panel, and loglevel=0 did not stop kernel warnings appearing on a
+  # card whose /proc/cmdline had it (staging-driver notices from snd_bcm2835 and
+  # friends, photographed mid-boot).
   #
-  # systemd.show_status=false is the one that removes the text a television actually
-  # shows. "[ OK ] Started ..." and the first-boot install progress are written by
-  # systemd to /dev/console directly, not through printk, so quiet and loglevel are
-  # both irrelevant to them — which is why the screen still scrolled with a cmdline
-  # that had every other silencing option on it.
-  for param in loglevel=0 vt.global_cursor_default=0 systemd.show_status=false; do
-    grep -q "$param" "$CMDLINE" || sed -i "s/\$/ $param/" "$CMDLINE"
+  # A VT is written to because console= enables it. With serial0 the only console=
+  # entry left, printk has no VT to write to, and /dev/console — which systemd writes
+  # its status to, past quiet and loglevel both — is the serial port. The panel then
+  # holds whatever VT1 has on it, which the masks below make nothing.
+  #
+  # The messages are not lost, they move: a serial adapter on the GPIO header, or
+  # `journalctl` over SSH, or the tty2 login below.
+  sed -i 's/ *console=tty1//' "$CMDLINE"
+
+  # loglevel=0 and the cursor default are kept as belt and braces — they cost nothing
+  # and still apply if a future gadget reintroduces a VT console. show_status=false is
+  # the one that silences systemd itself, which no printk setting reaches.
+  #
+  # The masks are the other half. `console-conf: disable: true` in the gadget defaults
+  # disables the setup *wizard*, not the unit: console-conf still runs on the console
+  # VT and leaves a login prompt there, and a getty takes the VT if console-conf does
+  # not. Both were found active on a device that had the default applied correctly.
+  # systemd.mask= is honoured by systemd-debug-generator from the first boot, which is
+  # what makes this better than masking them later from cloud-init.
+  #
+  # The keyboard login is moved rather than given up: tty2 is a VT nothing displays,
+  # so Alt-F2 still reaches a prompt on a unit whose network is down.
+  for param in loglevel=0 vt.global_cursor_default=0 systemd.show_status=false \
+               systemd.mask=getty@tty1.service \
+               systemd.mask=console-conf@tty1.service \
+               systemd.wants=getty@tty2.service; do
+    grep -qF "$param" "$CMDLINE" || sed -i "s/\$/ $param/" "$CMDLINE"
   done
 
   # Two console= entries are listed, one of them serial. Without this plymouth can
@@ -286,7 +300,8 @@ if [ "$DISPLAY_DRIVER" = "kms" ]; then
   grep -q 'plymouth.ignore-serial-consoles' "$CMDLINE" \
     || sed -i 's/$/ plymouth.ignore-serial-consoles/' "$CMDLINE"
 
-  echo "    silent boot: console -> tty3, loglevel=0, systemd status off, no cursor"
+  echo "    silent boot: no VT console, systemd status off, tty1 getty and"
+  echo "                 console-conf masked, login moved to tty2 (Alt-F2)"
   echo "                 (plymouth cannot run under full KMS — the screen is black)"
 
   # Full KMS relies on the kernel negotiating a mode, where fake KMS inherited whatever
