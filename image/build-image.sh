@@ -40,6 +40,12 @@ if ! rm -rf "$WORK" "$OUT" 2>/dev/null; then
 fi
 mkdir -p "$WORK" "$OUT"
 
+# Read here rather than at its first use: three separate pieces are keyed off it — the
+# slot, the first-boot connect and the cloud.conf that performs it — and the first of
+# them is needed before the gadget is even cloned. The reasoning behind the switch is
+# with the slot itself, further down.
+CEC_SLOT="${CEC_SLOT:-1}"
+
 echo "==> boot splash"
 # The gadget wants a 2:1 image; the master is square, so pad rather than stretch —
 # a non-uniform scale on a hexagon is obvious on a wall display.
@@ -75,14 +81,33 @@ if [ -f "$WORK/vendor-logo.png" ]; then
   ORGANIZE="$ORGANIZE      vendor-logo.png: splash/vendor-logo.png\n"
 fi
 
-# cloud.conf is NOT shipped. It is the documented UC20+ route for cloud-init config
-# and it does reach the device — snapd installs it as
-# /etc/cloud/cloud.cfg.d/80_device_gadget.cfg — but it never executes: Ubuntu Core
-# writes /etc/cloud/cloud-init.disabled when a device seeds without a datasource, so
-# cloud-init is disabled before any module runs. Verified on hardware.
+# cloud.conf is the documented UC20+ route for cloud-init config, and it is now the
+# only route left for connecting hdmi-cec on first boot: the gadget.yaml `connections:`
+# stanza is inert for unasserted snaps, for reasons set out where it used to be built,
+# further down.
 #
-# image/cloud-init.yaml is kept for whenever this is revisited. Shipping it as-is only
-# adds a file that looks like it does something. See docs/dhcp-discovery.md.
+# An earlier attempt at this shipped the config on its own and it never executed —
+# with no datasource to find, cloud-init reports itself untriggered and Ubuntu Core
+# writes /etc/cloud/cloud-init.disabled before any module has run. Verified on
+# hardware. image/gadget-cloud.conf therefore declares a `None` datasource, which is
+# cloud-init's documented answer to "the config is already on disk"; that is the whole
+# difference between the two attempts.
+#
+# CEC_SLOT=0 drops this along with the slot: without the slot the connect would fail,
+# and a failed runcmd is one more thing to explain on a board that has CEC turned off
+# on purpose. It also drops the console-conf masking the same file does, which suits
+# the one situation CEC_SLOT=0 exists for — a build made to find out what a stuck
+# device is saying, where text on the console VT is the point.
+if [ "$CEC_SLOT" != "0" ]; then
+  # Staged under a different name on purpose: an organize entry whose source and
+  # destination are the same path is rejected by snapcraft.
+  cp "$HERE/gadget-cloud.conf" "$EXTRAS/vt-cloud.conf"
+  ORGANIZE="$ORGANIZE      vt-cloud.conf: cloud.conf\n"
+fi
+
+# image/cloud-init.yaml (the DHCP option 225 request) is still not shipped. It could
+# ride in the same cloud.conf now that one runs, but it is a separate change and this
+# mechanism has yet to prove itself on hardware. See docs/dhcp-discovery.md.
 
 if [ -n "$ORGANIZE" ]; then
   {
@@ -109,12 +134,11 @@ fi
 # Declared here rather than in gadget.yaml: snap slots live in snapcraft.yaml, which
 # becomes meta/snap.yaml. gadget.yaml accepts a slots block and ignores it.
 #
-# CEC_SLOT=0 omits the slot *and* the matching gadget connection. A gadget snapd will
+# CEC_SLOT=0 omits the slot *and* the cloud.conf that connects to it. A gadget snapd will
 # not accept fails first-boot seeding outright, and the device then sits on
 # "Installing Ubuntu Core" forever with no console and no SSH account to ask why —
 # the two are created by the seeding that never finished. This switch exists to take
 # CEC out of the picture in one build rather than guessing at it across several.
-CEC_SLOT="${CEC_SLOT:-1}"
 if [ "$CEC_SLOT" = "0" ]; then
   echo "==> hdmi-cec slot SKIPPED (CEC_SLOT=0) — remote control will not work"
 elif ! grep -q '^  hdmi-cec:' "$WORK/pi-gadget/snapcraft.yaml"; then
@@ -235,15 +259,24 @@ if [ "$DISPLAY_DRIVER" = "kms" ]; then
   # arrives with the kiosk's own splash, which is held long enough to be seen.
   sed -i 's/ *vt\.handoff=2//' "$CMDLINE"
 
-  # Move the kernel console off tty1 so nothing paints the VT the panel is showing.
-  # tty3 rather than dropping it: the messages stay reachable on a keyboard, which is
-  # the only way to read them on a device whose console is a television.
+  # Move the kernel console off tty1. This does not move it off *screen*: the kernel
+  # makes the last console=ttyN the foreground VT, so the panel then shows tty3
+  # instead of tty1 and the text is exactly as visible as it was. Observed on a Pi 4
+  # with this cmdline already in place. tty3 is kept anyway because it is where the
+  # messages should live, and because /dev/console following it is what the next two
+  # settings depend on — but silencing is what actually clears the screen.
   sed -i 's/console=tty1/console=tty3/' "$CMDLINE"
 
   # quiet still lets warnings and errors through; loglevel=0 silences those too, and
   # global_cursor_default=0 removes the blinking block that is otherwise the only
   # thing on an empty screen.
-  for param in loglevel=0 vt.global_cursor_default=0; do
+  #
+  # systemd.show_status=false is the one that removes the text a television actually
+  # shows. "[ OK ] Started ..." and the first-boot install progress are written by
+  # systemd to /dev/console directly, not through printk, so quiet and loglevel are
+  # both irrelevant to them — which is why the screen still scrolled with a cmdline
+  # that had every other silencing option on it.
+  for param in loglevel=0 vt.global_cursor_default=0 systemd.show_status=false; do
     grep -q "$param" "$CMDLINE" || sed -i "s/\$/ $param/" "$CMDLINE"
   done
 
@@ -253,7 +286,8 @@ if [ "$DISPLAY_DRIVER" = "kms" ]; then
   grep -q 'plymouth.ignore-serial-consoles' "$CMDLINE" \
     || sed -i 's/$/ plymouth.ignore-serial-consoles/' "$CMDLINE"
 
-  echo "    silent boot: console -> tty3, loglevel=0, no cursor (plymouth cannot run)"
+  echo "    silent boot: console -> tty3, loglevel=0, systemd status off, no cursor"
+  echo "                 (plymouth cannot run under full KMS — the screen is black)"
 
   # Full KMS relies on the kernel negotiating a mode, where fake KMS inherited whatever
   # the firmware had already set up. On a Pi 4 that negotiation produced no picture at
@@ -365,66 +399,48 @@ defaults:
     cursor: none
     idle-timeout: 0
 EOF
-  echo "    console-conf disabled, ubuntu-frame set to run as a daemon"
+  # `console-conf: disable: true` skips the setup wizard. It does not stop the unit:
+  # console-conf@<console-tty>.service still runs and still puts a login prompt on the
+  # VT the panel is showing. Masking it is done from cloud.conf — see gadget-cloud.conf.
+  echo "    console-conf wizard disabled, ubuntu-frame set to run as a daemon"
 fi
 
-# /dev/cec0 is covered by no built-in interface. Publishing it as a custom-device slot
-# keeps CEC an auditable property of the signed image instead of dropping the client to
-# classic confinement. Appended only if the gadget does not already declare slots.
-# Only `connections` goes in gadget.yaml. The slot itself is declared in the gadget's
-# snapcraft.yaml, alongside its GPIO/I2C/SPI slots — see below. Putting a `slots:`
-# block here parses without complaint and is then ignored, which is how the gadget
-# shipped with no hdmi-cec slot at all ("snap \"pi\" has no slot named \"hdmi-cec\"").
+# There is deliberately no `connections:` stanza in gadget.yaml. It is the documented
+# way to auto-connect an interface at first boot, three versions of it have shipped
+# here, and none of them connected anything, because it cannot work on an image built
+# this way. From snapd, overlord/ifacestate/helpers.go, addGadgetConnections:
 #
-# snapd will not auto-connect custom-device on its own: it needs a store
-# snap-declaration or this. Without it the plug sits unconnected, /dev/cec0 is
-# unreachable and the client falls back to NullCecBackend.
+#   snapID := snapInfo.SnapID
+#   if snapID == "" {
+#       // not a snap-id identifiable snap, skip
+#       return nil
+#   }
 #
-# Both halves are qualified with a snap name. The slot used to be omitted entirely,
-# on the reasoning that a bare `slot: hdmi-cec` fails to parse ("expected
-# (<snap-id>|system):name") and a locally built gadget has no snap-id to qualify it
-# with. The first half is true; the conclusion is not. An omitted slot does not mean
-# "the gadget's own slot of the same name" — snapd defaults it to `system:<plug-name>`,
-# so this asked for a connection to a system slot named hdmi-cec, which does not exist.
-# It resolved to nothing, silently, and the plug stayed unconnected on every image.
+# A snap-id comes from a snap-declaration assertion, which only the store issues. Every
+# snap this script builds locally — the client and the pi gadget both — is unasserted
+# and has none, so the stanza is skipped before a single entry is looked at. That is
+# why `snap tasks 1` showed no Connect task for hdmi-cec at all, not even a failed one,
+# while every other connection in the seed produced one: the others are store snaps.
 #
-# The line above it disproves the reasoning: `visiontak-client` sits in the snap-id
-# position and that snap is unasserted too, with no snap-id. It works because snapd
-# falls back to treating an unresolvable snap-id as a snap *name*. `pi` resolves the
-# same way. What was actually wrong was the missing prefix, not the naming.
+# Past the check it would fail again anyway. Entries are matched by comparing
+# gconn.Plug.SnapID against the real snap-id, and the other side is put through
+# resolveSnapIDToName, which returns "" for a snap with no declaration — so
+# `slot: pi:hdmi-cec` resolves to repo.Slot("", "hdmi-cec"), nil, and is logged as
+# "gadget connections: ignoring missing slot". Snap *names* in the snap-id position
+# never worked; that they parse is not the same as that they resolve.
 #
-# `snap pack --check-skeleton` could never have caught this. It validates syntax, and
-# the omitted form is syntactically perfect — it just means something else.
+# So this route needs both snaps published to a store (a brand store counts) and the
+# gadget.yaml written with their actual snap-ids. Until then the connection is made on
+# first boot by cloud-init, from image/gadget-cloud.conf, which is shipped as the
+# gadget's cloud.conf above.
 #
-# NONE OF THIS ACTUALLY CONNECTS ANYTHING. Observed on a device built from this
-# script: the entry ships verbatim in /snap/pi/current/meta/gadget.yaml, seeding
-# completes, and `snap tasks 1` contains no Connect task for hdmi-cec at all — not a
-# failed one, none. snapd drops the entry silently. Every other connection in that
-# seed produced a task, so this is specific to it.
-#
-# So the qualified `slot: pi:hdmi-cec` above is not known to work either. It is kept
-# because it is at least the correct spelling of the intent, and costs nothing if a
-# later snapd honours it. Do not read its presence as evidence that auto-connection
-# happens — it does not.
-#
-# Until that is understood, connecting the plug is a manual provisioning step:
+# If that has not run — a reflash interrupted, or CEC_SLOT=0 — the fallback stays what
+# it has always been:
 #
 #   sudo snap connect visiontak-client:hdmi-cec pi:hdmi-cec
 #
-# The client now says exactly that in its log when the open is refused with EPERM,
-# because this has been rediscovered from a bare "Operation not permitted" on three
-# separate cards.
-#
-# Skipped with the slot under CEC_SLOT=0: the two have to be added and removed
-# together.
-if [ "$CEC_SLOT" != "0" ] && ! grep -q '^connections:' "$WORK/pi-gadget/gadget.yaml"; then
-  cat >> "$WORK/pi-gadget/gadget.yaml" <<'EOF'
-
-connections:
-  - plug: visiontak-client:hdmi-cec
-    slot: pi:hdmi-cec
-EOF
-fi
+# The client says exactly that in its log when the open is refused with EPERM, because
+# this has been rediscovered from a bare "Operation not permitted" on three cards.
 
 # Destructive mode installs build-packages onto this host, so it needs root. -E keeps
 # PATH (and /snap/bin with it) across the sudo.
@@ -444,6 +460,18 @@ if [ -f "$WORK/vendor-logo.png" ]; then
     echo "    splash: vendor-logo.png present in the gadget"
   else
     echo "vendor-logo.png did not make it into the gadget snap" >&2
+    exit 1
+  fi
+fi
+
+# Same reasoning as the logo, with more at stake: a gadget that builds without cloud.conf
+# produces an image whose remote is dead, and the only symptom is on a television.
+if [ "$CEC_SLOT" != "0" ]; then
+  if grep -q 'snap connect\|visiontak-client:hdmi-cec' "$WORK/gadget-check/cloud.conf" 2>/dev/null; then
+    echo "    cloud.conf: first-boot hdmi-cec connect present in the gadget"
+  else
+    echo "cloud.conf did not make it into the gadget snap, or does not connect" >&2
+    echo "hdmi-cec — the image would boot with no remote control" >&2
     exit 1
   fi
 fi

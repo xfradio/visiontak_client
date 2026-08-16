@@ -122,9 +122,44 @@ the entire point of the appliance, so the splash gives way. What the build does 
 is make the failure quiet rather than ugly — a wall display scrolling kernel messages
 reads as a broken computer, where black reads as a device starting up:
 
-- `console=tty1` → `console=tty3`, so nothing paints the VT the panel is showing
+- `console=tty1` → `console=tty3`, which is where the messages belong
 - `loglevel=0`, because `quiet` still lets warnings and errors through
 - `vt.global_cursor_default=0`, or a blinking block is the only thing on screen
+- `systemd.show_status=false`, which is the one that empties the screen
+
+Moving the console to tty3 does **not** move it off the panel, and believing it did
+cost a card. The kernel makes the last `console=ttyN` the foreground VT, so the panel
+shows tty3 instead of tty1 and the text is exactly as visible as before. Nor do `quiet`
+and `loglevel=0` reach it: `[ OK ] Started …` and the first-boot install progress are
+written by systemd to `/dev/console` directly rather than through printk, so they
+survive every printk-level setting. `systemd.show_status=false` is what silences them.
+
+The other half is what is *running* on that VT, which no kernel parameter touches:
+
+```bash
+cat /sys/class/tty/tty0/active                          # the VT on screen
+systemctl list-units --all 'getty@*' 'console-conf@*'   # what is drawing on it
+```
+
+On a working unit `tty0/active` reads `tty4` — Ubuntu Frame's own VT, which it takes
+when it starts. Before that the display is on a text VT, and both candidates have
+something drawing on them: `console-conf@tty3` on the console VT, `getty@tty1` on VT1.
+`console-conf: disable: true` in the gadget defaults does not prevent the first of
+those; it skips the setup wizard and leaves a login prompt on the console VT, which is
+text on a television for as long as boot takes.
+
+Which of the two is actually in front depends on whether the kernel moves the display
+along with `console=tty3`, so `image/gadget-cloud.conf` clears both rather than betting
+on it: `console-conf@tty1`, `console-conf@tty3`, `getty@tty1` and `getty@tty3` are all
+masked on first boot.
+
+The keyboard login is moved, not given up — the same file enables `getty@tty2`, on a VT
+nothing displays. **Alt-F2** on a unit whose network is down.
+
+Because the masking is done by cloud-init rather than baked into the image, the very
+first boot still shows the prompt until cloud-final runs. Every boot after that is
+black. Baking it in would need a writable rootfs at build time, which a UC24 image does
+not have.
 
 The boot is then black until Ubuntu Frame comes up, and the branding arrives with the
 client's own splash, which is held for `_SPLASH_MIN_SECONDS` so it is actually seen.

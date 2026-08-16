@@ -2,7 +2,7 @@ SNAP_NAME := visiontak-client
 PI ?= ubuntu@raspberrypi.local
 SNAP_TAG ?= clean
 
-.PHONY: help venv test lint snap install-pi run-local clean splash \
+.PHONY: help venv test lint snap install-pi connect-cec run-local clean splash \
         vm-setup vm-run vm-deploy vm-ssh vm-snapshot vm-restore vm-reset
 
 help:
@@ -29,6 +29,10 @@ install-pi: snap ## Copy and install the snap on a Pi running Ubuntu Core
 	ssh $(PI) 'sudo snap install --dangerous /tmp/$(SNAP_NAME)_*_arm64.snap'
 	ssh $(PI) 'sudo snap connect $(SNAP_NAME):hdmi-cec' || \
 		echo "connect hdmi-cec manually once the gadget provides the slot"
+
+connect-cec: ## Connect hdmi-cec on a flashed unit (PI=user@host) when first boot did not
+	ssh $(PI) 'sudo snap connect $(SNAP_NAME):hdmi-cec pi:hdmi-cec'
+	ssh $(PI) 'snap connections $(SNAP_NAME) | grep hdmi-cec'
 
 # Invoked through `sh` so a Windows checkout without the exec bit still works.
 splash: ## Generate the gadget boot splash (800x400) from assets/visiontak-logo.png

@@ -113,25 +113,57 @@ snap connections visiontak-client
 sudo snap connect visiontak-client:hdmi-cec pi:hdmi-cec   # if not auto-connected
 ```
 
-`hdmi-cec` should read `pi:hdmi-cec` with no `manual` note. If it shows `manual`, the
-gadget's auto-connection did not fire and someone connected it by hand — which does not
-survive a reflash, so the next card comes up with a dead remote.
+`hdmi-cec` should read `pi:hdmi-cec`. On an image from `image/build-image.sh` it is
+connected on first boot by cloud-init, not by snapd's own auto-connection — see below —
+so it is listed as `manual`. That is expected here, and it does survive a reboot; what
+does not survive is a connection someone made by hand on a card that will be reflashed.
 
-Both halves of that connection in `gadget.yaml` must be qualified with a snap name:
+### Why `gadget.yaml: connections:` is not used
 
-```yaml
-connections:
-  - plug: visiontak-client:hdmi-cec
-    slot: pi:hdmi-cec
+It is the documented way to connect an interface at first boot, and it cannot work on a
+locally built image. From snapd, `overlord/ifacestate/helpers.go`,
+`addGadgetConnections`:
+
+```go
+snapID := snapInfo.SnapID
+if snapID == "" {
+    // not a snap-id identifiable snap, skip
+    return nil
+}
 ```
 
-Omitting `slot:` is **not** the same as naming the gadget's own slot. snapd defaults it
-to `system:<plug-name>`, which does not exist, so the entry resolves to nothing —
-silently, with no warning and no seeding failure. That shipped on every image for
-weeks. A bare `slot: hdmi-cec` is a parse error and at least fails loudly; the omitted
-form is the dangerous one. Neither snap is asserted, so the names in the snap-id
-position work only because snapd falls back to treating an unresolvable snap-id as a
-snap name.
+A snap-id comes from a snap-declaration assertion, which only the store issues. The
+client and the `pi` gadget are both built locally and unasserted, so they have none and
+the entire stanza is skipped — no Connect task, not a failed one, no warning, nothing in
+`snap tasks 1`. Every other connection in that seed produces a task because those are
+store snaps.
+
+Past that check it fails again: entries are matched against the real snap-id, and the
+other side goes through `resolveSnapIDToName`, which returns `""` for a snap with no
+declaration, so `slot: pi:hdmi-cec` resolves to a nil slot and is dropped with
+`gadget connections: ignoring missing slot`. Snap *names* in the snap-id position parse,
+but they never resolve. Three spellings of this stanza shipped before that was clear.
+
+To use this route, publish both snaps (a brand store counts) and write their actual
+snap-ids into `gadget.yaml`.
+
+### What connects it instead
+
+`image/gadget-cloud.conf` is shipped as the gadget's `cloud.conf`, which snapd installs
+at first boot as `/etc/cloud/cloud.cfg.d/80_device_gadget.cfg` — grade `dangerous` takes
+it unfiltered. Its `runcmd` waits for seeding and runs the `snap connect`.
+
+The datasource block in it is load-bearing. An earlier attempt shipped the config alone
+and nothing ran: with no datasource to find, cloud-init reports itself untriggered and
+Ubuntu Core writes `/etc/cloud/cloud-init.disabled` before any module executes. The
+`None` datasource is cloud-init's documented answer to config that is already on disk.
+
+Check it after a flash:
+
+```bash
+cloud-init status --long                  # done, not disabled
+sudo cat /var/log/cloud-init-output.log | grep -A2 'snap connect'
+```
 
 `x11`, `desktop-legacy`, `desktop` and `gsettings` **do** appear in that list: the
 `gnome` extension declares them on every app it wraps and a snap cannot subtract them.
