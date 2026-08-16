@@ -158,12 +158,31 @@ and nothing ran: with no datasource to find, cloud-init reports itself untrigger
 Ubuntu Core writes `/etc/cloud/cloud-init.disabled` before any module executes. The
 `None` datasource is cloud-init's documented answer to config that is already on disk.
 
-Check it after a flash:
+Check it after a flash — by the result, not by cloud-init's status:
 
 ```bash
-cloud-init status --long                  # done, not disabled
-sudo cat /var/log/cloud-init-output.log | grep -A2 'snap connect'
+snap connections visiontak-client | grep hdmi-cec    # -> pi:hdmi-cec, manual
 ```
+
+`manual` is correct here and is not a sign someone connected it by hand. snapd labels
+anything it did not auto-connect that way, and this was connected by `snap connect`.
+
+Do **not** read `cloud-init status` as the health check. On a device where this worked
+it reports:
+
+```
+status: disabled
+boot_status_code: disabled-by-marker-file
+detail: DataSourceNone
+recoverable_errors:
+        WARNING: Used fallback datasource
+```
+
+All three lines are the success case. `DataSourceNone` and the fallback warning are the
+datasource doing its job, and `disabled` is Ubuntu Core writing
+`/etc/cloud/cloud-init.disabled` *after* the run, which is what it does with a local
+datasource once seeding is done. The run happens once per flash, which is all the
+connection needs — it persists from then on.
 
 `x11`, `desktop-legacy`, `desktop` and `gsettings` **do** appear in that list: the
 `gnome` extension declares them on every app it wraps and a snap cannot subtract them.
